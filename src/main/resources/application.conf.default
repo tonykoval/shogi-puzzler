@@ -1,0 +1,53 @@
+app {
+  oauth {
+    enabled = false
+    enabled = ${?APP_OAUTH_ENABLED}
+    google {
+      client-id     = "YOUR_GOOGLE_CLIENT_ID"
+      client-id     = ${?APP_OAUTH_CLIENT_ID}
+      client-secret = "YOUR_GOOGLE_CLIENT_SECRET"
+      client-secret = ${?APP_OAUTH_CLIENT_SECRET}
+      redirect-uri  = "http://localhost:8080/callback"
+      redirect-uri  = ${?APP_OAUTH_REDIRECT_URI}
+    }
+  }
+
+  security {
+    allowed-emails = [
+      "your.email@example.com"
+    ]
+  }
+
+  fetcher {
+    lishogi {
+      nickname = "lishogi_user"
+    }
+    shogiwars {
+      nickname = "swars_user"
+    }
+    dojo81 {
+      nickname = "dojo81_user"
+      password = ""
+    }
+  }
+
+  analysis {
+    shallow-limit = 1
+    shallow-limit = ${?APP_ANALYSIS_SHALLOW_LIMIT}
+    deep-limit = 10
+    deep-limit = ${?APP_ANALYSIS_DEEP_LIMIT}
+    win-chance-drop-threshold = 0.1
+    win-chance-drop-threshold = ${?APP_ANALYSIS_WIN_CHANCE_DROP_THRESHOLD}
+  }
+
+  mongodb {
+    uri = "mongodb://localhost:27017"
+    uri = ${?APP_MONGODB_URI}
+    database = "shogi-puzzler"
+  }
+
+  engine {
+    path = "engine/YaneuraOu_NNUE"
+    path = ${?ENGINE_PATH}
+  }
+}

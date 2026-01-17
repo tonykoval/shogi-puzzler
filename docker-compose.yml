@@ -1,0 +1,14 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - ENGINE_PATH=engine/yaneuraou_linux
+      - APP_MONGODB_URI=mongodb://host.docker.internal:27017
+      - APP_OAUTH_ENABLED=false
+      - APP_OAUTH_REDIRECT_URI=http://localhost:8080/callback
+      - APP_ANALYSIS_SHALLOW_LIMIT=1
+      - APP_ANALYSIS_DEEP_LIMIT=10
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
