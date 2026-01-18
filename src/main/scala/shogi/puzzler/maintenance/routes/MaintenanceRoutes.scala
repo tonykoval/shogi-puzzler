@@ -43,19 +43,23 @@ object MaintenanceRoutes extends BaseRoutes {
 
   @cask.get("/maintenance")
   def index(player: Option[String] = None, search_text: Option[String] = None, request: cask.Request): cask.Response[String] = {
-    val initialPlayer = player.getOrElse(search_text.getOrElse(""))
-    logger.info(s"[MAINTENANCE] Dashboard accessed. Initial player: $initialPlayer")
-    
-    val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
-      cask.Redirect("/login")
-    } else {
-      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+    redirectToConfiguredHostIfNeeded(request).getOrElse {
+      val initialPlayer = player.getOrElse(search_text.getOrElse(""))
+      logger.info(s"[MAINTENANCE] Dashboard accessed. Initial player: $initialPlayer")
       
-      cask.Response(
-        renderMaintenancePage(initialPlayer, userEmail, settings).render,
-        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-      )
+      val userEmail = getSessionUserEmail(request)
+      if (oauthEnabled && userEmail.isEmpty) {
+        logger.info(s"[MAINTENANCE] Redirecting to /login because userEmail is empty (oauthEnabled=$oauthEnabled)")
+        noCacheRedirect("/login")
+      } else {
+        val targetEmail = if (oauthEnabled) userEmail else None
+        val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
+        
+        cask.Response(
+          renderMaintenancePage(initialPlayer, userEmail, settings).render,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+        )
+      }
     }
   }
 

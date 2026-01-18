@@ -11,15 +11,18 @@ object ViewerRoutes extends BaseRoutes {
 
   @cask.get("/viewer")
   def viewer(hash: Option[String] = None, request: cask.Request) = {
-    val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
-      cask.Redirect("/login")
-    } else {
-      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-      cask.Response(
-        renderViewer(userEmail, settings).render,
-        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-      )
+    redirectToConfiguredHostIfNeeded(request).getOrElse {
+      val userEmail = getSessionUserEmail(request)
+      if (oauthEnabled && userEmail.isEmpty) {
+        logger.info(s"[VIEWER] Redirecting to /login because userEmail is empty")
+        noCacheRedirect("/login")
+      } else {
+        val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+        cask.Response(
+          renderViewer(userEmail, settings).render,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+        )
+      }
     }
   }
 

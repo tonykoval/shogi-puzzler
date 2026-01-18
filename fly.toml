@@ -1,0 +1,25 @@
+# fly.toml app configuration file generated for shogi-puzzler
+
+app = "shogi-puzzler"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+[env]
+  ENGINE_PATH = "engine/yaneuraou_linux"
+  APP_OAUTH_ENABLED = "false"
+  APP_ANALYSIS_SHALLOW_LIMIT = "1"
+  APP_ANALYSIS_DEEP_LIMIT = "10"
+
+# Note: APP_MONGODB_URI should be set via fly secrets:
+# fly secrets set APP_MONGODB_URI=mongodb+srv://...
+# APP_OAUTH_REDIRECT_URI should also be updated to your fly.dev URL

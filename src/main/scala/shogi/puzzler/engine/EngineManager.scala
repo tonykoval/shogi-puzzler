@@ -72,7 +72,7 @@ class EngineManager(engineCommandPath: Seq[String]) {
    * @param memoryMegabytes Hash table size in MB
    */
   def initialize(threadCount: Int = Runtime.getRuntime.availableProcessors(),
-                 memoryMegabytes: Int = 1024): Unit = {
+                 memoryMegabytes: Int = 256): Unit = {
     logger.info(s"[ENGINE] Initializing engine with $threadCount threads and ${memoryMegabytes}MB memory")
     shogiEngine.startEngine(threadCount, memoryMegabytes)
     isInitialized = true

@@ -21,15 +21,18 @@ object ConfigRoutes extends BaseRoutes {
 
   @cask.get("/config")
   def configPage(request: cask.Request) = {
-    val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
-      cask.Redirect("/login")
-    } else {
-      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-      cask.Response(
-        renderConfigPage(userEmail, settings).render,
-        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-      )
+    redirectToConfiguredHostIfNeeded(request).getOrElse {
+      val userEmail = getSessionUserEmail(request)
+      if (oauthEnabled && userEmail.isEmpty) {
+        logger.info(s"[CONFIG] Redirecting to /login because userEmail is empty")
+        noCacheRedirect("/login")
+      } else {
+        val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+        cask.Response(
+          renderConfigPage(userEmail, settings).render,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+        )
+      }
     }
   }
 
@@ -73,7 +76,7 @@ object ConfigRoutes extends BaseRoutes {
   def saveConfig(lishogi_nickname: String, shogiwars_nickname: String, dojo81_nickname: String, dojo81_password: String, engine_path: String, shallow_limit: Int, deep_limit: Int, win_chance_threshold: Double, request: cask.Request) = {
     val userEmail = getSessionUserEmail(request)
     if (oauthEnabled && userEmail.isEmpty) {
-      cask.Redirect("/login")
+      noCacheRedirect("/login")
     } else {
       val targetUser = userEmail.getOrElse("global")
       logger.info(s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold")
@@ -81,7 +84,7 @@ object ConfigRoutes extends BaseRoutes {
       val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, encryptedPassword, engine_path, shallow_limit, deep_limit, win_chance_threshold)
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
       
-      cask.Redirect("/config")
+      noCacheRedirect("/config")
     }
   }
 
