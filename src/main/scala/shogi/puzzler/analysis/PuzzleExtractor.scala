@@ -232,33 +232,35 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       puzzleId = game.gameIdentifier + "#" + positionBeforeBlunder.positionSfen.boardString.getOrElse(""),
       moveNumber = moveNumber,
       opponentMoveSquares = opponentLastMove.map(_.positions.map(_.key)),
-      blunderMoveDetails = Some(getPiece(
-        playerBlunderMove.map(_.usi).getOrElse(""),
-        Color(sfenComponents(1)(0)).get,
-        None,
-        Some(povScoreToWrapScoreForPlayer(positionAfterBlunder.evaluationScore, game.playerColorInGame))
-      ).get),
-      bestMoveDetails = Some(getPiece(
+      blunderMoveDetails = playerBlunderMove.flatMap(move =>
+        getPiece(
+          move.usi,
+          Color(sfenComponents(1)(0)).get,
+          None,
+          Some(povScoreToWrapScoreForPlayer(positionAfterBlunder.evaluationScore, game.playerColorInGame))
+        )
+      ),
+      bestMoveDetails = getPiece(
         bestMove.usiNotation,
         Color(sfenComponents(1)(0)).get,
         Some(1),
         Some(povScoreToWrapScoreForPlayer(bestMove.evaluationScore, game.playerColorInGame))
-      ).get),
+      ),
       secondMoveDetails = secondBestMove.flatMap(move =>
-        Some(getPiece(
+        getPiece(
           move.usiNotation,
           Color(sfenComponents(1)(0)).get,
           Some(2),
           Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
-        ).get)
+        )
       ),
       thirdMoveDetails = thirdBestMove.flatMap(move =>
-        Some(getPiece(
+        getPiece(
           move.usiNotation,
           Color(sfenComponents(1)(0)).get,
           Some(3),
           Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
-        ).get)
+        )
       ),
       piecesInHand = Some(sfenComponents(2)),
       explanationComment = Some(explanationText),
