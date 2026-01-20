@@ -60,6 +60,7 @@ abstract class BaseRoutes extends Routes {
   }
 
   protected def redirectToConfiguredHostIfNeeded(request: cask.Request): Option[cask.Response[String]] = {
+    if (!oauthEnabled) return None
     val incomingHostHeader = request.headers.get("host").flatMap(_.headOption)
     val targetUri = new URI(oauthRedirectUri)
     val targetHost = Option(targetUri.getHost).getOrElse("")

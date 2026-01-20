@@ -173,6 +173,55 @@ window.maintenance = {
   isFetchingShogiwars: false,
   isFetchingDojo81: false,
   autoFetched: false,
+  
+  pollTask: function(taskId, $results, onComplete, onError, onProgress, taskType = 'fetch') {
+    const self = this;
+    const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+    if (taskId && !activeTasks[taskId]) {
+      console.log('Adding task to localStorage:', taskId, taskType);
+      activeTasks[taskId] = { type: taskType, startedAt: Date.now() };
+      localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
+    }
+
+    const poll = () => {
+      $.get('/maintenance-task-status?id=' + taskId)
+        .done(function(task) {
+          if (task.status === 'running') {
+            if (onProgress) onProgress(task.message);
+            else if ($results) $results.find('.status-message').text(task.message);
+            
+            // Periodically re-check if button exists to disable it if it was just rendered
+            const currentActive = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+            if (currentActive[taskId] && currentActive[taskId].kifHash) {
+               const $btn = $('.btn-task-' + currentActive[taskId].kifHash);
+               if ($btn.length > 0 && !$btn.prop('disabled')) {
+                  $btn.prop('disabled', true).text(task.message);
+               }
+            }
+
+            setTimeout(poll, 1000);
+          } else {
+            console.log('Task finished:', taskId, task.status);
+            // Remove from active tasks
+            const currentActive = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+            delete currentActive[taskId];
+            localStorage.setItem('activeTasks', JSON.stringify(currentActive));
+
+            if (task.status === 'completed') {
+              if (onComplete) onComplete(task.resultHtml);
+            } else if (task.status === 'failed') {
+              if (onError) onError(task.error || 'Unknown error');
+            }
+          }
+        })
+        .fail(function(xhr) {
+          console.error('Polling failed for task:', taskId, xhr.statusText);
+          if (onError) onError('Failed to poll task status: ' + xhr.statusText);
+        });
+    };
+    poll();
+  },
+
   doFetch: function(source, name, force = false) {
     if (!name || name.trim() === '') {
       alert('Please enter a nickname for ' + source);
@@ -206,16 +255,41 @@ window.maintenance = {
       this.isFetchingDojo81 = true;
     }
     
-    $results.html('<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div> <span>Fetching games for ' + name + '...</span></div>');
+    $results.html('<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div> <span class="status-message">Fetching games for ' + name + '...</span></div>');
     
     $.get('/maintenance-fetch?player=' + encodeURIComponent(name) + '&source=' + source + '&force=' + force + '&limit=' + maxGames)
-      .done(function(html) {
-        $results.html(html);
+      .done(function(data) {
+        let taskId;
+        try {
+          taskId = JSON.parse(data).taskId;
+        } catch(e) {
+          // Fallback if backend returned HTML directly (shouldn't happen now)
+          $results.html(data);
+          if (isLishogi) self.isFetchingLishogi = false;
+          else if (isShogiwars) self.isFetchingShogiwars = false;
+          else if (isDojo81) self.isFetchingDojo81 = false;
+          return;
+        }
+        
+        self.pollTask(taskId, $results, 
+          function(html) { // complete
+            $results.html(html);
+            if (isLishogi) self.isFetchingLishogi = false;
+            else if (isShogiwars) self.isFetchingShogiwars = false;
+            else if (isDojo81) self.isFetchingDojo81 = false;
+          },
+          function(error) { // error
+            $results.html('<div class="alert alert-danger">Error: ' + error + '</div>');
+            if (isLishogi) self.isFetchingLishogi = false;
+            else if (isShogiwars) self.isFetchingShogiwars = false;
+            else if (isDojo81) self.isFetchingDojo81 = false;
+          },
+          null,
+          'fetch'
+        );
       })
       .fail(function(xhr) {
         $results.html('<div class="alert alert-danger">Error: ' + xhr.statusText + '</div>');
-      })
-      .always(function() {
         if (isLishogi) self.isFetchingLishogi = false;
         else if (isShogiwars) self.isFetchingShogiwars = false;
         else if (isDojo81) self.isFetchingDojo81 = false;
@@ -265,10 +339,19 @@ $(document).on('click', '.analyze-btn', function() {
   const kif = $(this).data('kif');
   const player = $(this).data('player');
   const source = $(this).data('site') || 'unknown';
+  
+  // Use same hash logic as backend
+  let hash = 0;
+  for (let i = 0; i < kif.length; i++) {
+    hash = ((31 * hash) + kif.charCodeAt(i)) | 0;
+  }
+  const kifHash = Math.abs(hash).toString(16);
+  
   const $btn = $(this);
+  $btn.addClass('btn-task-' + kifHash);
   $btn.prop('disabled', true).text('Analyzing...');
   
-  console.log('Sending analysis request for', player, 'from', source);
+  console.log('Sending analysis request for', player, 'from', source, 'kifHash:', kifHash);
   
   $.ajax({
     url: '/maintenance-analyze',
@@ -279,21 +362,41 @@ $(document).on('click', '.analyze-btn', function() {
       player: player,
       source: source
     }),
-    success: function(res) {
-      console.log('Analysis response:', res);
-      // Backend returns a string for corsResponse sometimes, or JSON
-      // If it's a success string from corsResponse(s"Analysis complete...")
-      alert('Analysis complete!');
+    success: function(data) {
+      let taskId;
+      try {
+        taskId = JSON.parse(data).taskId;
+      } catch(e) {
+        alert('Analysis complete!');
+        location.reload();
+        return;
+      }
       
-      // Find the row and update it instead of full refresh if possible, 
-      // but full refresh is safer for now to ensure state consistency.
-      const lishogiName = $('#lishogiNickname').val();
-      const shogiwarsName = $('#shogiwarsNickname').val();
-      const dojo81Name = $('#dojo81Nickname').val();
-      
-      if (lishogiName) window.maintenance.doFetch('lishogi', lishogiName, false);
-      if (shogiwarsName) window.maintenance.doFetch('shogiwars', shogiwarsName, false);
-      if (dojo81Name) window.maintenance.doFetch('dojo81', dojo81Name, false);
+      const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+      activeTasks[taskId] = { type: 'analyze', startedAt: Date.now(), kifHash: kifHash };
+      localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
+
+      window.maintenance.pollTask(taskId, null,
+        function(result) { // complete
+          alert(result || 'Analysis complete!');
+          
+          const lishogiName = $('#lishogiNicknameInput').val();
+          const shogiwarsName = $('#shogiwarsNicknameInput').val();
+          const dojo81Name = $('#dojo81NicknameInput').val();
+          
+          if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
+          if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
+          if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
+        },
+        function(error) { // error
+          alert('Error analyzing game: ' + error);
+          $btn.prop('disabled', false).text('Analyze');
+        },
+        function(message) { // progress
+          $('.btn-task-' + kifHash).text(message);
+        },
+        'analyze'
+      );
     },
     error: function(xhr) {
       console.error('Analysis error:', xhr.status, xhr.responseText);
@@ -305,6 +408,8 @@ $(document).on('click', '.analyze-btn', function() {
 $(document).ready(function() {
   if (!window.maintenance.autoFetched) {
     window.maintenance.autoFetched = true;
+    console.log('Maintenance dashboard ready');
+    
     const lishogiName = $('#lishogiNicknameInput').val();
     const shogiwarsName = $('#shogiwarsNicknameInput').val();
     const dojo81Name = $('#dojo81NicknameInput').val();
@@ -312,5 +417,40 @@ $(document).ready(function() {
     if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
     if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
     if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
+
+    // Resume active tasks
+    const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+    console.log('Active tasks to resume:', activeTasks);
+    
+    Object.keys(activeTasks).forEach(taskId => {
+      const task = activeTasks[taskId];
+      console.log('Resuming active task:', taskId, task);
+      if (task.type === 'analyze') {
+        window.maintenance.pollTask(taskId, null, 
+          function(result) { 
+            alert(result || 'Analysis complete!');
+            location.reload(); 
+          },
+          function(err) { console.error('Resumed analysis task failed:', err); },
+          function(msg) {
+             if (task.kifHash) {
+                $('.btn-task-' + task.kifHash).text(msg).prop('disabled', true);
+             }
+          },
+          'analyze'
+        );
+      } else if (task.type === 'fetch') {
+        // autoFetch already started new fetch tasks, so we might have duplicates.
+        // For simplicity, we just clear old fetch tasks from localStorage if they're old,
+        // or just let them poll.
+        if (Date.now() - task.startedAt > 10 * 60 * 1000) { // 10 minutes
+           delete activeTasks[taskId];
+           localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
+        } else {
+           // Poll but don't update UI containers as they might be handled by autoFetch
+           window.maintenance.pollTask(taskId, null, null, null, null, 'fetch');
+        }
+      }
+    });
   }
 });

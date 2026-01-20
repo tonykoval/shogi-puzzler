@@ -122,10 +122,16 @@ object GameLoader {
         logger.info(s"[LOADER] Successfully extracted ${positions.size} valid positions")
         positions
 
-      case Incomplete(_, replayFailures) =>
-        val errorMsg = s"Incomplete game replay with failures: $replayFailures"
-        logger.error(s"[LOADER ERROR] $errorMsg")
-        throw new Exception(errorMsg)
+      case Incomplete(gameReplay, replayFailures) =>
+        logger.warn(s"[LOADER] Incomplete game replay with failures: $replayFailures. Returning valid part of the game.")
+        val positions = Replay
+          .gamesWhileValid(gameReplay.state.usis, Some(gameReplay.setup.toSfen), shogi.variant.Standard)
+          ._1
+          .map(gameState => gameState.usis -> gameState.toSfen)
+          .toList
+
+        logger.info(s"[LOADER] Successfully extracted ${positions.size} valid positions before failure")
+        positions
     }
   }
 

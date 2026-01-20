@@ -18,7 +18,7 @@ class PuzzleExtractorSpec extends AnyFlatSpec with Matchers {
       nextDeepAnalysisResult
     }
 
-    override def analyzeShallow(game: ParsedGame, secondsPerMove: Int): Seq[AnalysisResult] = Seq.empty
+    override def analyzeShallow(game: ParsedGame, secondsPerMove: Int, onProgress: String => Unit): Seq[AnalysisResult] = Seq.empty
   }
 
   val stubAnalyzer = new StubGameAnalyzer()

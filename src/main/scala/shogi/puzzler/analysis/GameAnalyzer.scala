@@ -33,11 +33,12 @@ class GameAnalyzer(engineManager: EngineManager) {
    * @param secondsPerMove Time limit for each position
    * @return Analysis result for each position
    */
-  def analyzeShallow(game: ParsedGame, secondsPerMove: Int = 1): Seq[AnalysisResult] = {
+  def analyzeShallow(game: ParsedGame, secondsPerMove: Int = 1, onProgress: String => Unit = _ => ()): Seq[AnalysisResult] = {
     logger.info(s"[ANALYZER] Starting shallow analysis of ${game.allPositions.size} positions")
     logger.info(s"[ANALYZER] Time per move: ${secondsPerMove}s")
 
     val allResults = game.allPositions.zipWithIndex.map { case ((moveHistory, positionSfen), positionIndex) =>
+      onProgress(s"Analyzing move ${positionIndex + 1}/${game.allPositions.size}...")
       val rawEngineResults = engineManager.analyze(
         positionSfen.value,
         Limit(time = Some(secondsPerMove))
@@ -121,7 +122,7 @@ class GameAnalyzer(engineManager: EngineManager) {
       evaluationScore = parsedScore,
       moveNumber = moveNumber,
       nodesPerSecond = rawEngineData.get("nps").collect { case nodeCount: Int => nodeCount },
-      principalVariation = rawEngineData.get("pv").collect { case pvLines: List[String] => pvLines.head }
+      principalVariation = rawEngineData.get("pv").collect { case pvLines: List[_] => pvLines.head.asInstanceOf[String] }
     )
   }
 }

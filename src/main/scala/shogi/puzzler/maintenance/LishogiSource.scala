@@ -9,10 +9,11 @@ object LishogiSource extends GameSource {
 
   override def name: String = "Lishogi"
 
-  override def fetchGames(playerName: String, limit: Int = 10, userEmail: Option[String] = None): Seq[SearchGame] = {
+  override def fetchGames(playerName: String, limit: Int = 10, userEmail: Option[String] = None, onProgress: String => Unit = _ => ()): Seq[SearchGame] = {
     try {
       val url = s"https://lishogi.org/api/games/user/$playerName"
       logger.info(s"[LISHOGI] Calling API: $url")
+      onProgress(s"Calling Lishogi API for $playerName...")
 
       val response = requests.get(
         url,

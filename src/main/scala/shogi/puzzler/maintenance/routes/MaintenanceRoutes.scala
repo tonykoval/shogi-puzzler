@@ -10,8 +10,10 @@ import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
 import shogi.puzzler.engine.EngineManager
 import shogi.puzzler.serialization.PuzzleJsonSerializer
 import shogi.puzzler.domain.SearchGame
-import shogi.puzzler.maintenance.{ShogiWarsSource, LishogiSource, Dojo81Source}
+import shogi.puzzler.maintenance.{ShogiWarsSource, LishogiSource, Dojo81Source, TaskManager}
 import scala.collection.mutable
+import scala.concurrent.ExecutionContext.Implicits.global
+import scala.concurrent.Future
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
@@ -43,7 +45,8 @@ object MaintenanceRoutes extends BaseRoutes {
 
   @cask.get("/maintenance")
   def index(player: Option[String] = None, search_text: Option[String] = None, request: cask.Request): cask.Response[String] = {
-    redirectToConfiguredHostIfNeeded(request).getOrElse {
+    val redirectOpt = if (oauthEnabled) redirectToConfiguredHostIfNeeded(request) else None
+    redirectOpt.getOrElse {
       val initialPlayer = player.getOrElse(search_text.getOrElse(""))
       logger.info(s"[MAINTENANCE] Dashboard accessed. Initial player: $initialPlayer")
       
@@ -130,210 +133,248 @@ object MaintenanceRoutes extends BaseRoutes {
           val userEmail = getSessionUserEmail(request)
           logger.info(s"[MAINTENANCE] Analysis request received for player: $player, source: $source, user: $userEmail")
           
-          val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-          val engineManager = getEngineManager(settings.enginePath)
+          val taskId = TaskManager.createTask()
           
-          try {
-            logger.info(s"[MAINTENANCE] Using engine: ${settings.enginePath}")
-            val analyzer = new GameAnalyzer(engineManager)
-            val extractor = new PuzzleExtractor(analyzer)
-            
-            logger.info(s"[MAINTENANCE] Parsing KIF...")
-            val parsedGame = GameLoader.parseKif(kif, Some(player))
-            logger.info(s"[MAINTENANCE] KIF parsed. Starting shallow analysis (limit: ${settings.shallowLimit})...")
-            val shallowResults = analyzer.analyzeShallow(parsedGame, settings.shallowLimit)
-            
-            logger.info(s"[MAINTENANCE] Shallow analysis complete. Extracting puzzles (limit: ${settings.deepLimit}, threshold: ${settings.winChanceDropThreshold})...")
-            val puzzles = extractor.extract(
-              parsedGame, 
-              shallowResults, 
-              settings.winChanceDropThreshold, 
-              settings.deepLimit
-            )
-            
-            val kifHash = GameRepository.md5Hash(kif)
-            val exists = Await.result(GameRepository.exists(kif), 10.seconds)
-            
-            if (!exists) {
-              val gameDetails = Map(
-                "sente" -> parsedGame.sentePlayerName.getOrElse("Unknown"),
-                "gote" -> parsedGame.gotePlayerName.getOrElse("Unknown"),
-                "date" -> parsedGame.gameDate.getOrElse(""),
-                "site" -> parsedGame.gameSite.getOrElse(source)
+          Future {
+            try {
+              val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+              val engineManager = getEngineManager(settings.enginePath)
+              
+              logger.info(s"[MAINTENANCE] Using engine: ${settings.enginePath}")
+              val analyzer = new GameAnalyzer(engineManager)
+              val extractor = new PuzzleExtractor(analyzer)
+              
+              TaskManager.updateProgress(taskId, "Parsing KIF...")
+              logger.info(s"[MAINTENANCE] Parsing KIF...")
+              val parsedGame = GameLoader.parseKif(kif, Some(player))
+              logger.info(s"[MAINTENANCE] KIF parsed. Starting shallow analysis (limit: ${settings.shallowLimit})...")
+              val shallowResults = analyzer.analyzeShallow(parsedGame, settings.shallowLimit, msg => TaskManager.updateProgress(taskId, msg))
+              
+              TaskManager.updateProgress(taskId, "Extracting puzzles...")
+              logger.info(s"[MAINTENANCE] Shallow analysis complete. Extracting puzzles (limit: ${settings.deepLimit}, threshold: ${settings.winChanceDropThreshold})...")
+              val puzzles = extractor.extract(
+                parsedGame, 
+                shallowResults, 
+                settings.winChanceDropThreshold, 
+                settings.deepLimit
               )
-              logger.info(s"[MAINTENANCE] Saving new game to DB...")
-              try {
-                Await.result(GameRepository.saveGame(kif, gameDetails), 10.seconds)
-              } catch {
-                case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
-                  logger.info(s"[MAINTENANCE] Game $kifHash was just inserted by another request. Cleaning up old analysis...")
-                  Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+              
+              val kifHash = GameRepository.md5Hash(kif)
+              val exists = Await.result(GameRepository.exists(kif), 10.seconds)
+              
+              if (!exists) {
+                val gameDetails = Map(
+                  "sente" -> parsedGame.sentePlayerName.getOrElse("Unknown"),
+                  "gote" -> parsedGame.gotePlayerName.getOrElse("Unknown"),
+                  "date" -> parsedGame.gameDate.getOrElse(""),
+                  "site" -> parsedGame.gameSite.getOrElse(source)
+                )
+                logger.info(s"[MAINTENANCE] Saving new game to DB...")
+                try {
+                  Await.result(GameRepository.saveGame(kif, gameDetails), 10.seconds)
+                } catch {
+                  case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
+                    logger.info(s"[MAINTENANCE] Game $kifHash was just inserted by another request. Cleaning up old analysis...")
+                    Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+                }
+              } else {
+                logger.info(s"[MAINTENANCE] Game $kifHash already exists in DB. Cleaning up old analysis...")
+                Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
               }
-            } else {
-              logger.info(s"[MAINTENANCE] Game $kifHash already exists in DB. Cleaning up old analysis...")
-              Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+              
+              logger.info(s"[MAINTENANCE] Found ${puzzles.size} puzzles for game $kifHash")
+              Await.result(GameRepository.markAsAnalyzed(kifHash), 10.seconds)
+              
+              val scores = shallowResults.map(_.evaluationScore.forPlayer(Color.Sente).toNumeric)
+              Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
+              
+              puzzles.foreach { p =>
+                val json = ujson.write(PuzzleJsonSerializer.puzzleToJson(p))
+                Await.result(GameRepository.savePuzzle(json, kifHash), 10.seconds)
+              }
+              
+              logger.info(s"[MAINTENANCE] Analysis complete for $kifHash. ${puzzles.size} puzzles found and saved.")
+              TaskManager.complete(taskId, s"Analysis complete. ${puzzles.size} puzzles found.")
+            } catch {
+              case e: Exception =>
+                logger.error(s"!!! [MAINTENANCE] Analysis failed", e)
+                TaskManager.fail(taskId, e.getMessage)
             }
-            
-            logger.info(s"[MAINTENANCE] Found ${puzzles.size} puzzles for game $kifHash")
-            Await.result(GameRepository.markAsAnalyzed(kifHash), 10.seconds)
-            
-            val scores = shallowResults.map(_.evaluationScore.forPlayer(Color.Sente).toNumeric)
-            Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
-            
-            puzzles.foreach { p =>
-              val json = ujson.write(PuzzleJsonSerializer.puzzleToJson(p))
-              Await.result(GameRepository.savePuzzle(json, kifHash), 10.seconds)
-            }
-            
-            logger.info(s"[MAINTENANCE] Analysis complete for $kifHash. ${puzzles.size} puzzles found and saved.")
-            corsResponse(s"Analysis complete. ${puzzles.size} puzzles found.")
-          } catch {
-            case e: Exception =>
-              logger.error(s"!!! [MAINTENANCE] Analysis failed", e)
-              cask.Response(e.getMessage, statusCode = 500, headers = Seq("Access-Control-Allow-Origin" -> "*"))
           }
+          
+          corsResponse(ujson.write(ujson.Obj("taskId" -> taskId)))
         }
     }
   }
 
+  @cask.get("/maintenance-task-status")
+  def taskStatus(id: String) = {
+    TaskManager.getTask(id) match {
+      case Some(task) =>
+        ujson.Obj(
+          "id" -> task.id,
+          "status" -> task.status,
+          "message" -> task.message,
+          "resultHtml" -> ujson.Str(task.resultHtml.getOrElse("")),
+          "error" -> ujson.Str(task.error.getOrElse(""))
+        )
+      case None =>
+        ujson.Obj("error" -> "Task not found")
+    }
+  }
+
   @cask.get("/maintenance-fetch")
-  def fetch(player: String = "", source: String = "shogiwars", search_text: String = "", force: Boolean = false, limit: Int = 10, request: cask.Request) = {
+  def fetch(player: String = "", source: String = "shogiwars", search_text: String = "", force: Boolean = false, limit: Int = 10, request: cask.Request): cask.Response[String] = {
     val userEmail = getSessionUserEmail(request)
     val targetPlayer = if (player.nonEmpty) player else search_text
     val sourceId = source
     val cacheKey = s"$sourceId:$targetPlayer"
     logger.info(s"[MAINTENANCE] Fetch request for player: '$targetPlayer', source: '$sourceId', force: $force, limit: $limit, user: $userEmail")
-    val result = if (targetPlayer.trim.isEmpty) {
-      div(p(s"No nickname configured or provided for source '$sourceId'."))
+    
+    if (targetPlayer.trim.isEmpty) {
+       corsResponse(ujson.write(ujson.Obj("error" -> s"No nickname configured or provided for source '$sourceId'.")))
     } else {
-      try {
-        logger.info(s"[MAINTENANCE] Processing fetch for '$targetPlayer' from '$sourceId'")
-        val games = if (!force) {
-          logger.info(s"[MAINTENANCE] Fetching games from DB for $targetPlayer, source $sourceId with limit $limit")
-          val dbGames = Await.result(GameRepository.findByPlayerAndSource(targetPlayer, sourceId, limit), 10.seconds)
-          logger.info(s"[MAINTENANCE] DB returned ${dbGames.size} games")
-          dbGames.map { doc =>
-            SearchGame(
-              sente = doc.get("sente").map(v => cleanPlayerName(v.asString().getValue)).getOrElse(""),
-              gote = doc.get("gote").map(v => cleanPlayerName(v.asString().getValue)).getOrElse(""),
-              date = doc.get("date").map(_.asString().getValue).getOrElse(""),
-              kif = doc.get("kif").map(_.asString().getValue),
-              existsInDb = true,
-              isAnalyzed = doc.get("is_analyzed").exists(_.asBoolean().getValue),
-              puzzleCount = 0,
-              site = doc.get("site").map(_.asString().getValue)
-            )
-          }
-        } else {
-          logger.info(s"[MAINTENANCE] Fetching games from external source $sourceId for $targetPlayer with limit $limit")
-          val fetcher = sources.getOrElse(sourceId, ShogiWarsSource)
-          val fetched = fetcher.fetchGames(targetPlayer, limit, userEmail)
-          gamesCache(cacheKey) = fetched
-          fetched
-        }
-
-        val gamesWithDbStatus = games.map { g =>
-          val kifHash = g.kif.map(GameRepository.md5Hash)
-          
-          val (exists, analyzed, pCount) = if (g.existsInDb) {
-            val hash = kifHash.get
-            val count = Await.result(GameRepository.countPuzzlesForGame(hash), 5.seconds).toInt
-            (true, g.isAnalyzed, count)
+      val taskId = TaskManager.createTask()
+      
+      Future {
+        try {
+          logger.info(s"[MAINTENANCE] Processing fetch for '$targetPlayer' from '$sourceId'")
+          val games = if (!force) {
+            logger.info(s"[MAINTENANCE] Fetching games from DB for $targetPlayer, source $sourceId with limit $limit")
+            val dbGames = Await.result(GameRepository.findByPlayerAndSource(targetPlayer, sourceId, limit), 10.seconds)
+            logger.info(s"[MAINTENANCE] DB returned ${dbGames.size} games")
+            dbGames.map { doc =>
+              SearchGame(
+                sente = doc.get("sente").map(v => cleanPlayerName(v.asString().getValue)).getOrElse(""),
+                gote = doc.get("gote").map(v => cleanPlayerName(v.asString().getValue)).getOrElse(""),
+                date = doc.get("date").map(_.asString().getValue).getOrElse(""),
+                kif = doc.get("kif").map(_.asString().getValue),
+                existsInDb = true,
+                isAnalyzed = doc.get("is_analyzed").exists(_.asBoolean().getValue),
+                puzzleCount = 0,
+                site = doc.get("site").map(_.asString().getValue)
+              )
+            }
           } else {
-            val dbGame = kifHash.flatMap(hash => Await.result(GameRepository.getGameByHash(hash), 5.seconds))
-            
-            val ex = dbGame.isDefined
-            val an = dbGame.exists(_.get("is_analyzed").exists(_.asBoolean().getValue))
-            val pc = if (ex && an) Await.result(GameRepository.countPuzzlesForGame(kifHash.get), 5.seconds).toInt else 0
-            (ex, an, pc)
+            logger.info(s"[MAINTENANCE] Fetching games from external source $sourceId for $targetPlayer with limit $limit")
+            val fetcher = sources.getOrElse(sourceId, ShogiWarsSource)
+            val fetched = fetcher.fetchGames(targetPlayer, limit, userEmail, msg => TaskManager.updateProgress(taskId, msg))
+            gamesCache(cacheKey) = fetched
+            fetched
           }
-          
-          g.copy(existsInDb = exists, isAnalyzed = analyzed, puzzleCount = pCount)
-        }
 
-        div(
-          div(cls := "d-flex justify-content-between align-items-center")(
-            h3(s"Results for $targetPlayer"),
-            tag("span")(cls := s"badge ${if (force) "bg-info" else "bg-secondary"}")(
-              if (force) "Fetched from Website" else "Fetched from DB"
-            )
-          ),
-          if (gamesWithDbStatus.isEmpty) p("No games found.")
-          else
-            div(cls := "table-responsive")(
-              table(cls := "table table-dark table-hover")(
-                thead(
-                  tr(th(""), th("Sente"), th("Gote"), th("Date"), th("Status"), th("Puzzles"), th("Analysis"), th("Actions"))
-                ),
-                tbody(
-                  gamesWithDbStatus.map { g =>
-                    val kifHash = g.kif.map(GameRepository.md5Hash).getOrElse("")
-                    tr(
-                      td(
-                        if (!g.existsInDb && g.kif.isDefined)
-                          input(`type` := "checkbox", cls := "game-check", 
-                            attr("data-sente") := g.sente,
-                            attr("data-gote") := g.gote,
-                            attr("data-date") := g.date,
-                            attr("data-kif") := g.kif.getOrElse(""),
-                            attr("data-site") := g.site.getOrElse(""),
-                            checked := true
-                          )
-                        else ""
-                      ),
-                      td(g.sente),
-                      td(g.gote),
-                      td(g.date),
-                      td(
-                        if (g.existsInDb) tag("span")(cls := "badge bg-success")("In DB")
-                        else tag("span")(cls := "badge bg-warning text-dark")("New")
-                      ),
-                      td(if (g.isAnalyzed) tag("span")(g.puzzleCount.toString) else "-"),
-                      td(
-                        if (g.existsInDb) {
-                          if (g.isAnalyzed) {
-                            div(
-                              tag("span")(cls := "badge bg-info")("Analyzed"),
-                              a(href := s"/viewer?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary ms-2")("Puzzles"),
-                              button(cls := "btn btn-sm btn-outline-primary ms-2 graph-btn",
-                                attr("data-hash") := kifHash,
-                                attr("data-sente") := g.sente,
-                                attr("data-gote") := g.gote
-                              )("Graph"),
-                              a(href := s"/lishogi-redirect?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-outline-success ms-2")("Lishogi")
+          val gamesWithDbStatus = games.map { g =>
+            val kifHash = g.kif.map(GameRepository.md5Hash)
+            
+            val (exists, analyzed, pCount) = if (g.existsInDb) {
+              val hash = kifHash.get
+              val count = Await.result(GameRepository.countPuzzlesForGame(hash), 5.seconds).toInt
+              (true, g.isAnalyzed, count)
+            } else {
+              val dbGame = kifHash.flatMap(hash => Await.result(GameRepository.getGameByHash(hash), 5.seconds))
+              
+              val ex = dbGame.isDefined
+              val an = dbGame.exists(_.get("is_analyzed").exists(_.asBoolean().getValue))
+              val pc = if (ex && an) Await.result(GameRepository.countPuzzlesForGame(kifHash.get), 5.seconds).toInt else 0
+              (ex, an, pc)
+            }
+            
+            g.copy(existsInDb = exists, isAnalyzed = analyzed, puzzleCount = pCount)
+          }
+
+          val resultHtml = div(
+            div(cls := "d-flex justify-content-between align-items-center")(
+              h3(s"Results for $targetPlayer"),
+              tag("span")(cls := s"badge ${if (force) "bg-info" else "bg-secondary"}")(
+                if (force) "Fetched from Website" else "Fetched from DB"
+              )
+            ),
+            if (gamesWithDbStatus.isEmpty) p("No games found.")
+            else
+              div(cls := "table-responsive")(
+                table(cls := "table table-dark table-hover")(
+                  thead(
+                    tr(th(""), th("Sente"), th("Gote"), th("Date"), th("Status"), th("Puzzles"), th("Analysis"), th("Actions"))
+                  ),
+                  tbody(
+                    gamesWithDbStatus.map { g =>
+                      val kifHash = g.kif.map(GameRepository.md5Hash).getOrElse("")
+                      val kif = g.kif.getOrElse("")
+                      val kifHashStr = if (kif.nonEmpty) {
+                        var h = 0
+                        var i = 0
+                        while (i < kif.length) {
+                          h = 31 * h + kif.charAt(i)
+                          i += 1
+                        }
+                        java.lang.Math.abs(h).toHexString
+                      } else ""
+                      tr(
+                        td(
+                          if (!g.existsInDb && g.kif.isDefined)
+                            input(`type` := "checkbox", cls := "game-check", 
+                              attr("data-sente") := g.sente,
+                              attr("data-gote") := g.gote,
+                              attr("data-date") := g.date,
+                              attr("data-kif") := kif,
+                              attr("data-site") := g.site.getOrElse(""),
+                              checked := true
                             )
-                          } else button(cls := "btn btn-sm btn-warning analyze-btn", 
-                                      attr("data-kif") := g.kif.getOrElse(""),
-                                      attr("data-player") := targetPlayer)("Analyze")
-                        } else ""
-                      ),
-                      td(
-                        if (g.isAnalyzed) {
-                          button(cls := "btn btn-sm btn-danger delete-analysis-btn",
-                            attr("data-hash") := kifHash,
-                            attr("data-player") := targetPlayer)("Delete Analysis")
-                        } else ""
+                          else ""
+                        ),
+                        td(g.sente),
+                        td(g.gote),
+                        td(g.date),
+                        td(
+                          if (g.existsInDb) tag("span")(cls := "badge bg-success")("In DB")
+                          else tag("span")(cls := "badge bg-warning text-dark")("New")
+                        ),
+                        td(if (g.isAnalyzed) tag("span")(g.puzzleCount.toString) else "-"),
+                        td(
+                          if (g.existsInDb) {
+                            if (g.isAnalyzed) {
+                              div(
+                                tag("span")(cls := "badge bg-info")("Analyzed"),
+                                a(href := s"/viewer?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary ms-2")("Puzzles"),
+                                button(cls := "btn btn-sm btn-outline-primary ms-2 graph-btn",
+                                  attr("data-hash") := kifHash,
+                                  attr("data-sente") := g.sente,
+                                  attr("data-gote") := g.gote
+                                )("Graph"),
+                                a(href := s"/lishogi-redirect?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-outline-success ms-2")("Lishogi")
+                              )
+                            } else button(cls := s"btn btn-sm btn-warning analyze-btn btn-task-$kifHashStr", 
+                                        attr("data-kif") := kif,
+                                        attr("data-player") := targetPlayer,
+                                        attr("data-site") := g.site.getOrElse(""))("Analyze")
+                          } else ""
+                        ),
+                        td(
+                          if (g.isAnalyzed) {
+                            button(cls := "btn btn-sm btn-danger delete-analysis-btn",
+                              attr("data-hash") := kifHash,
+                              attr("data-player") := targetPlayer)("Delete Analysis")
+                          } else ""
+                        )
                       )
-                    )
-                  }
-                )
-              ),
-              if (gamesWithDbStatus.exists(g => !g.existsInDb && g.kif.isDefined)) {
-                button(id := "storeBtn", cls := "btn btn-success")("Download Selected to DB")
-              } else ""
-            )
-        )
-      } catch {
-        case e: Exception =>
-          div(cls := "alert alert-danger")(
-            h4("Error fetching games"),
-            p(e.getMessage),
-            pre(e.getStackTrace.take(5).mkString("\n"))
+                    }
+                  )
+                ),
+                if (gamesWithDbStatus.exists(g => !g.existsInDb && g.kif.isDefined)) {
+                  button(id := "storeBtn", cls := "btn btn-success")("Download Selected to DB")
+                } else ""
+              )
           )
+          TaskManager.complete(taskId, resultHtml.render)
+        } catch {
+          case e: Exception =>
+            logger.error(s"[MAINTENANCE] Fetch failed", e)
+            TaskManager.fail(taskId, e.getMessage)
+        }
       }
+      
+      corsResponse(ujson.write(ujson.Obj("taskId" -> taskId)))
     }
-    logger.info(s"[MAINTENANCE] Fetch completed for $targetPlayer. Rendering fragment.")
-    corsResponse(result.render)
   }
 
   private def cleanPlayerName(name: String): String = {

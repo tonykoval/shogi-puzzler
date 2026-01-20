@@ -66,7 +66,7 @@ RUN apt-get update && apt-get install -y \
     libgstreamer-plugins-base1.0-0 \
     libatomic1 \
     libxslt1.1 \
-    libwoff2dec1.0.2 \
+    libwoff1 \
     libvpx7 \
     libevent-2.1-7 \
     libopus0 \

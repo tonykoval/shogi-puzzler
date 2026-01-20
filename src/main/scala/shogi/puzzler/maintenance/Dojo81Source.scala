@@ -14,23 +14,26 @@ object Dojo81Source extends GameSource {
 
   override def name: String = "81Dojo"
 
-  override def fetchGames(playerName: String, limit: Int, userEmail: Option[String] = None): Seq[SearchGame] = {
+  override def fetchGames(playerName: String, limit: Int, userEmail: Option[String] = None, onProgress: String => Unit = _ => ()): Seq[SearchGame] = {
     import scala.concurrent.Await
     import scala.concurrent.duration._
     import shogi.puzzler.db.SettingsRepository
 
+    onProgress("Loading 81Dojo settings...")
     val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
     val username = settings.dojo81Nickname
     val password = shogi.puzzler.util.CryptoUtil.decrypt(settings.dojo81Password)
 
     if (username.isEmpty || password.isEmpty || username == "dojo81_user") {
       logger.error(s"[81DOJO] Username or password not configured for user: ${userEmail.getOrElse("global")}")
+      onProgress("81Dojo credentials not configured.")
       return Seq.empty
     }
 
     var playwright: Playwright = null
     var browser: Browser = null
     try {
+      onProgress("Launching browser...")
       playwright = Playwright.create()
       browser = playwright.chromium().launch(new BrowserType.LaunchOptions().setHeadless(true))
       val context = browser.newContext(new Browser.NewContextOptions()
@@ -39,6 +42,7 @@ object Dojo81Source extends GameSource {
         .setPermissions(java.util.List.of("clipboard-read", "clipboard-write")))
       val page = context.newPage()
 
+      onProgress("Logging in to 81Dojo...")
       logger.info("[81DOJO] Logging in...")
       val loginUrl = "https://system.81dojo.com/en/players/sign_in"
       page.navigate(loginUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD))
@@ -63,15 +67,18 @@ object Dojo81Source extends GameSource {
         } catch {
           case _: Exception => "Unknown login error"
         }
+        onProgress(s"Login failed: $errorMsg")
         throw new RuntimeException(s"Login failed: $errorMsg")
       }
 
+      onProgress("Login successful. Navigating to search form...")
       logger.info("[81DOJO] Login successful")
 
       val searchUrl = "https://system.81dojo.com/en/kifus/search/form"
       logger.info(s"[81DOJO] Navigating to search form: $searchUrl")
       page.navigate(searchUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD))
 
+      onProgress(s"Searching for games of $playerName...")
       page.fill("input[name='conditions[player1]']", playerName)
       page.click("input[type='submit']")
 
@@ -86,6 +93,7 @@ object Dojo81Source extends GameSource {
         val maxStabilityWait = 10 // 5 seconds total (10 * 1000ms / 2? No, 10 * 1000ms)
 
         while (stabilityCount < 3 && stabilityCount < maxStabilityWait) {
+          onProgress(s"Waiting for results to stabilize ($currentCount rows found)...")
           if (currentCount > 0 && currentCount == lastCount) {
             stabilityCount += 1
           } else {
@@ -100,6 +108,7 @@ object Dojo81Source extends GameSource {
       } catch {
         case e: Exception =>
           logger.error(s"[81DOJO] Search results (rows) not found: ${e.getMessage}")
+          onProgress("Search results not found.")
           // Take screenshot for debugging
           val screenshotPath = java.nio.file.Paths.get("81dojo_search_error.png")
           page.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
@@ -109,10 +118,13 @@ object Dojo81Source extends GameSource {
       val rows = page.locator("table.list tbody tr").all().asScala
       val validRows = rows.filter(r => r.locator("td").count() >= 8)
       logger.info(s"[81DOJO] Found ${rows.size} rows, ${validRows.size} valid games (limit requested: $limit)")
+      
+      val count = Math.min(validRows.size, limit)
+      onProgress(s"Found $count valid games. Fetching detail pages...")
 
       val detailPage = context.newPage()
       try {
-        validRows.take(limit).flatMap { row =>
+        validRows.take(limit).zipWithIndex.flatMap { case (row, idx) =>
           try {
             val cells = row.locator("td").all().asScala
             if (cells.size < 8) {
@@ -126,6 +138,8 @@ object Dojo81Source extends GameSource {
               val players = playersText.split("\n")
               val sente = if (players.length >= 1) players(0).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
               val gote = if (players.length >= 2) players(1).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
+
+              onProgress(s"[$idx/$count] Fetching detail for $sente vs $gote ($date)...")
 
               val gameDetailLink = cells(7).locator("a").first()
               val gameUrl = gameDetailLink.getAttribute("href")
@@ -143,6 +157,7 @@ object Dojo81Source extends GameSource {
               
               // Extract KIF
               val kif = try {
+                onProgress(s"[$idx/$count] Extracting KIF for $sente vs $gote...")
                 // The 81Dojo viewer is in a cross-origin iframe named 'viewer_frame'
                 // We need to click the Menu button first to make the Copy button visible
                 val menuSelector = "#kifuMenuButton"
@@ -362,6 +377,7 @@ object Dojo81Source extends GameSource {
           } catch {
             case e: Exception =>
               logger.error(s"[81DOJO] Error processing row: ${e.getMessage}")
+              onProgress(s"Error processing game $idx: ${e.getMessage}")
               None
           }
         }.toSeq
@@ -372,6 +388,7 @@ object Dojo81Source extends GameSource {
     } catch {
       case e: Exception =>
         logger.error(s"[81DOJO ERROR] ${e.getMessage}", e)
+        onProgress(s"Error: ${e.getMessage}")
         Seq.empty
     } finally {
       if (browser != null) browser.close()
