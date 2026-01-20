@@ -19,7 +19,7 @@ primary_region = "ord"
   APP_OAUTH_ENABLED = "false"
   APP_ANALYSIS_SHALLOW_LIMIT = "1"
   APP_ANALYSIS_DEEP_LIMIT = "10"
-  APP_SECURITY_ALLOWED_EMAILS = "[\"your.email@example.com\"]"
+  APP_SECURITY_ALLOWED_EMAILS = "your.email@example.com"
 
 # Note: APP_MONGODB_URI should be set via fly secrets:
 # fly secrets set APP_MONGODB_URI=mongodb+srv://...
