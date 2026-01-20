@@ -16,6 +16,7 @@ app {
     allowed-emails = [
       "your.email@example.com"
     ]
+    allowed-emails = ${?APP_SECURITY_ALLOWED_EMAILS}
   }
 
   fetcher {
