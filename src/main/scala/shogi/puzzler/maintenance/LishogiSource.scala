@@ -9,7 +9,13 @@ object LishogiSource extends GameSource {
 
   override def name: String = "Lishogi"
 
-  override def fetchGames(playerName: String, limit: Int = 10, userEmail: Option[String] = None, onProgress: String => Unit = _ => ()): Seq[SearchGame] = {
+  override def fetchGames(
+    playerName: String,
+    limit: Int = 10,
+    userEmail: Option[String] = None,
+    onProgress: String => Unit = _ => (),
+    skipExisting: Boolean = false
+  ): Seq[SearchGame] = {
     try {
       val url = s"https://lishogi.org/api/games/user/$playerName"
       logger.info(s"[LISHOGI] Calling API: $url")
@@ -17,7 +23,7 @@ object LishogiSource extends GameSource {
 
       val response = requests.get(
         url,
-        params = Map("max" -> limit.toString, "clocks" -> "false", "evals" -> "false", "opening" -> "false"),
+        params = Map("max" -> (if (skipExisting) (limit * 5).toString else limit.toString), "clocks" -> "false", "evals" -> "false", "opening" -> "false"),
         headers = Map("Accept" -> "application/x-ndjson")
       )
 
@@ -34,7 +40,11 @@ object LishogiSource extends GameSource {
       }
       val lines = text.split("\n").filter(_.nonEmpty)
       
-      lines.flatMap { line =>
+      import shogi.puzzler.db.GameRepository
+      import scala.concurrent.Await
+      import scala.concurrent.duration._
+
+      val results = lines.flatMap { line =>
         try {
           val data = ujson.read(line)
           val players = data("players")
@@ -53,14 +63,18 @@ object LishogiSource extends GameSource {
             .toLocalDate.toString
           
           val id = data("id").str
-          
-          logger.info(s"[LISHOGI] Fetching KIF for $id")
-          
-          // Fetch KIF
-          val kifResponse = requests.get(s"https://lishogi.org/game/export/$id.kif")
-          val kif = if (kifResponse.statusCode == 200) Some(kifResponse.text()) else None
 
-          Some(SearchGame(sente, gote, date, kif, site = Some("lishogi")))
+          if (skipExisting) {
+            val exists = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds).isDefined
+            if (exists) {
+              logger.info(s"[LISHOGI] Skipping existing game $id ($sente vs $gote $date)")
+              None
+            } else {
+              fetchKif(id, sente, gote, date)
+            }
+          } else {
+            fetchKif(id, sente, gote, date)
+          }
         } catch {
           case e: Exception =>
             logger.error(s"[LISHOGI] Error parsing game line: ${e.getMessage}")
@@ -68,10 +82,20 @@ object LishogiSource extends GameSource {
         }
       }.toSeq
 
+      results.take(limit)
+
     } catch {
       case e: Exception =>
         logger.error(s"[LISHOGI ERROR] ${e.getMessage}", e)
         Seq.empty
     }
+  }
+
+  private def fetchKif(id: String, sente: String, gote: String, date: String): Option[SearchGame] = {
+    logger.info(s"[LISHOGI] Fetching KIF for $id")
+    // Fetch KIF
+    val kifResponse = requests.get(s"https://lishogi.org/game/export/$id.kif")
+    val kif = if (kifResponse.statusCode == 200) Some(kifResponse.text()) else None
+    Some(SearchGame(sente, gote, date, kif, site = Some("lishogi")))
   }
 }

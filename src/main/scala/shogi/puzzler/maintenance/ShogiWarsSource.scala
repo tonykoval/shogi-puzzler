@@ -16,7 +16,13 @@ object ShogiWarsSource extends GameSource {
     name.replaceAll("\\s+\\d+[級段].*$", "").trim
   }
 
-  override def fetchGames(playerName: String, limit: Int = 10, userEmail: Option[String] = None, onProgress: String => Unit = _ => ()): Seq[SearchGame] = {
+  override def fetchGames(
+    playerName: String,
+    limit: Int = 10,
+    userEmail: Option[String] = None,
+    onProgress: String => Unit = _ => (),
+    skipExisting: Boolean = false
+  ): Seq[SearchGame] = {
     onProgress(s"Initializing ShogiWars fetch for $playerName...")
     val playwright = Playwright.create()
     val browser = playwright.chromium().launch(
@@ -55,26 +61,30 @@ object ShogiWarsSource extends GameSource {
       val count = Math.min(records.length, limit)
       onProgress(s"Found ${records.length} records. Fetching KIFs for $count games...")
 
-      records.take(limit).zipWithIndex.map { case (r, idx) =>
+      import shogi.puzzler.db.GameRepository
+      import scala.concurrent.Await
+      import scala.concurrent.duration._
+
+      val results = records.zipWithIndex.flatMap { case (r, idx) =>
         val key = r("key").str
         val sente = cleanPlayerName(r("player_info")("black")("name").str)
         val gote = cleanPlayerName(r("player_info")("white")("name").str)
         val date = r("battled_at").str.split("T").head // Simple date extraction
-        
-        onProgress(s"[$idx/${count}] Fetching KIF for $sente vs $gote ($date)...")
-        logger.info(s"[SHOGIWARS] Fetching KIF for $key")
-        val kifUrl = s"https://www.shogi-extend.com/w/$key.kif"
-        val kifResp = context.request().get(kifUrl)
-        
-        val kif = if (kifResp.ok()) {
-          Some(kifResp.text())
-        } else {
-          logger.error(s"[SHOGIWARS] Failed to fetch KIF for $key: ${kifResp.status()}")
-          None
-        }
 
-        SearchGame(sente, gote, date, kif, site = Some("shogiwars"))
+        if (skipExisting) {
+          val exists = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds).isDefined
+          if (exists) {
+            logger.info(s"[SHOGIWARS] Skipping existing game $key ($sente vs $gote $date)")
+            None
+          } else {
+            fetchGameKif(context, key, sente, gote, date, idx, count, onProgress)
+          }
+        } else {
+          fetchGameKif(context, key, sente, gote, date, idx, count, onProgress)
+        }
       }.toSeq
+
+      results.take(limit)
 
     } catch {
       case e: Exception =>
@@ -85,5 +95,30 @@ object ShogiWarsSource extends GameSource {
       browser.close()
       playwright.close()
     }
+  }
+
+  private def fetchGameKif(
+    context: BrowserContext,
+    key: String,
+    sente: String,
+    gote: String,
+    date: String,
+    idx: Int,
+    total: Int,
+    onProgress: String => Unit
+  ): Option[SearchGame] = {
+    onProgress(s"[$idx/${total}] Fetching KIF for $sente vs $gote ($date)...")
+    logger.info(s"[SHOGIWARS] Fetching KIF for $key")
+    val kifUrl = s"https://www.shogi-extend.com/w/$key.kif"
+    val kifResp = context.request().get(kifUrl)
+
+    val kif = if (kifResp.ok()) {
+      Some(kifResp.text())
+    } else {
+      logger.error(s"[SHOGIWARS] Failed to fetch KIF for $key: ${kifResp.status()}")
+      None
+    }
+
+    Some(SearchGame(sente, gote, date, kif, site = Some("shogiwars")))
   }
 }

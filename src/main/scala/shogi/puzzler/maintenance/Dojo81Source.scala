@@ -14,7 +14,13 @@ object Dojo81Source extends GameSource {
 
   override def name: String = "81Dojo"
 
-  override def fetchGames(playerName: String, limit: Int, userEmail: Option[String] = None, onProgress: String => Unit = _ => ()): Seq[SearchGame] = {
+  override def fetchGames(
+    playerName: String,
+    limit: Int,
+    userEmail: Option[String] = None,
+    onProgress: String => Unit = _ => (),
+    skipExisting: Boolean = false
+  ): Seq[SearchGame] = {
     import scala.concurrent.Await
     import scala.concurrent.duration._
     import shogi.puzzler.db.SettingsRepository

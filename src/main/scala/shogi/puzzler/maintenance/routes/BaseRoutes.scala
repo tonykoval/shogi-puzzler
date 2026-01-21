@@ -41,7 +41,9 @@ abstract class BaseRoutes extends Routes {
   protected val oauthRedirectUri = config.getString("app.oauth.google.redirect-uri")
   protected val allowedEmails: Set[String] = {
     val raw = config.getString("app.security.allowed-emails")
-    raw.split(",").map(_.trim).filter(_.nonEmpty).toSet
+    val emails = raw.split(",").map(_.trim).filter(_.nonEmpty).toSet
+    logger.info(s"[AUTH] Allowed emails: ${emails.mkString(", ")}")
+    emails
   }
 
   protected val noCacheHeaders = Seq(
