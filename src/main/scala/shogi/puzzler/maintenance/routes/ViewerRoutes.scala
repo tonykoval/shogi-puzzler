@@ -44,7 +44,7 @@ object ViewerRoutes extends BaseRoutes {
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
-        Components.renderHeader(userEmail, settings),
+        Components.renderHeader(userEmail, settings, appVersion),
         div(id := "main-wrap")(
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
@@ -68,6 +68,9 @@ object ViewerRoutes extends BaseRoutes {
                       button(cls := "btn btn-outline-secondary next-puzzle", title := "Next Puzzle") (
                         i(cls := "bi bi-chevron-right")
                       )
+                    ),
+                    button(cls := "btn btn-sm btn-outline-warning reload-data w-100 mt-2", title := "Reload data from DB") (
+                      i(cls := "bi bi-arrow-clockwise me-1"), "Reload Data"
                     )
                   )
                 ),

@@ -259,8 +259,10 @@ object Dojo81Source extends GameSource {
                        // Take a screenshot of the frame if possible
                        try {
                           val timestamp = System.currentTimeMillis()
-                          viewerFrame.page().screenshot(new Page.ScreenshotOptions().setPath(java.nio.file.Paths.get(s"81dojo_frame_error_$timestamp.png")))
-                       } catch { case _: Exception => }
+                          // Check if directory exists or just use a path that we know is writable
+                          val screenshotPath = java.nio.file.Paths.get(s"81dojo_frame_error_$timestamp.png")
+                          viewerFrame.page().screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+                       } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
                    }
                 }
                 
@@ -365,7 +367,9 @@ object Dojo81Source extends GameSource {
                    // Take screenshot for debugging
                    val timestamp = System.currentTimeMillis()
                    val screenshotPath = java.nio.file.Paths.get(s"81dojo_kif_error_$timestamp.png")
-                   detailPage.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+                   try {
+                     detailPage.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+                   } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
                 }
 
                 Option(foundKif).filter(_.nonEmpty)

@@ -4,7 +4,7 @@ import scalatags.Text.all._
 import shogi.puzzler.db.AppSettings
 
 object Components {
-  def layout(title: String, userEmail: Option[String], settings: AppSettings, scripts: Seq[Modifier] = Seq.empty)(content: Modifier*) = {
+  def layout(title: String, userEmail: Option[String], settings: AppSettings, version: String = "", scripts: Seq[Modifier] = Seq.empty)(content: Modifier*) = {
     html(lang := "en", cls := "dark")(
       head(
         meta(charset := "utf-8"),
@@ -19,7 +19,7 @@ object Components {
         scripts
       ),
       body(cls := "container mt-0")(
-        renderHeader(userEmail, settings),
+        renderHeader(userEmail, settings, version),
         content
       )
     )
@@ -37,8 +37,7 @@ object Components {
                   tag("span")(cls := "input-group-text bg-dark text-light border-secondary")("Hits"),
                   input(`type` := "number", id := s"${idPrefix}MaxGames", cls := "form-control bg-dark text-light border-secondary", value := "10")
                 ),
-                input(`type` := "text", id := s"${idPrefix}NicknameInput", cls := "form-control form-control-sm bg-dark text-light border-secondary", value := nickname, style := "width: 150px"),
-                button(cls := "btn btn-sm btn-outline-primary", onclick := s"window.maintenance.doFetch('$idPrefix', $$('#${idPrefix}NicknameInput').val(), true)")(s"Fetch $title")
+                button(cls := "btn btn-sm btn-outline-primary", onclick := s"window.maintenance.doFetch('$idPrefix', '$nickname', true)")(s"Fetch $title")
               )
             ),
             div(id := s"$idPrefix-results", cls := "results-container")(
@@ -57,12 +56,13 @@ object Components {
     )
   }
 
-  def renderHeader(userEmail: Option[String], settings: AppSettings) = {
+  def renderHeader(userEmail: Option[String], settings: AppSettings, version: String) = {
     val engineName = settings.enginePath.split("[\\\\/]").last
     
     tag("nav")(cls := "navbar navbar-expand-lg navbar-dark bg-dark mb-4")(
       div(cls := "container-fluid")(
-        a(cls := "navbar-brand", href := "/maintenance")("Shogi Puzzler"),
+        a(cls := "navbar-brand", href := "/my-games")("Shogi Puzzler"),
+        if (version.nonEmpty) span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
         button(cls := "navbar-toggler", `type` := "button", 
           attr("data-bs-toggle") := "collapse", 
           attr("data-bs-target") := "#navbarNav") (
@@ -71,7 +71,7 @@ object Components {
         div(cls := "collapse navbar-collapse", id := "navbarNav")(
           ul(cls := "navbar-nav me-auto")(
             li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/maintenance")("Maintenance")
+              a(cls := "nav-link", href := "/my-games")("My Games")
             ),
             li(cls := "nav-item")(
               a(cls := "nav-link", href := "/viewer")("Puzzle viewer")
@@ -84,7 +84,8 @@ object Components {
             div(cls := "me-3 text-light-50", style := "font-size: 0.85rem;")(
               div(cls := "d-inline-block me-3")(
                 span(cls := "badge bg-secondary me-1")("Lishogi"), span(settings.lishogiNickname),
-                span(cls := "badge bg-secondary ms-2 me-1")("ShogiWars"), span(settings.shogiwarsNickname)
+                span(cls := "badge bg-secondary ms-2 me-1")("ShogiWars"), span(settings.shogiwarsNickname),
+                span(cls := "badge bg-secondary ms-2 me-1")("81Dojo"), span(settings.dojo81Nickname)
               )
             ),
             span(cls := "ms-2")(

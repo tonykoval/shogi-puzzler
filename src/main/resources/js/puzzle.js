@@ -3,24 +3,80 @@ const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
 const apiUrl = hash ? "data?hash=" + hash : "data";
+const cacheKey = hash ? "puzzles_" + hash : "puzzles_all";
 
-$.ajax({
-    url: apiUrl,
-    dataType : 'json',
-    async : false,
-    success : function(json) {
-        data = json
-        selectedData = data
-        ids = createIds(data)
-
-        games.select2({
-            data: ids,
-            templateSelection: formatPuzzle,
-            templateResult: formatPuzzle
-        })
-
-        selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
+function loadData(forceReload = false) {
+    if (!forceReload) {
+        const cachedData = localStorage.getItem(cacheKey);
+        if (cachedData) {
+            try {
+                const json = JSON.parse(cachedData);
+                initPuzzles(json);
+                return;
+            } catch (e) {
+                console.error("Error parsing cached data", e);
+                localStorage.removeItem(cacheKey);
+            }
+        }
     }
+
+    const reloadBtn = $(".reload-data");
+    const originalHtml = reloadBtn.html();
+    reloadBtn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>');
+
+    $.ajax({
+        url: apiUrl,
+        dataType: 'json',
+        success: function(json) {
+            localStorage.setItem(cacheKey, JSON.stringify(json));
+            initPuzzles(json);
+            if (forceReload) {
+                Swal.fire({
+                    icon: 'success',
+                    title: 'Data Reloaded',
+                    text: 'Puzzles have been updated from the database.',
+                    timer: 1500,
+                    showConfirmButton: false
+                });
+            }
+        },
+        error: function(xhr, status, error) {
+            console.error("Error fetching data", error);
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to fetch data from the server.'
+            });
+        },
+        complete: function() {
+            reloadBtn.prop('disabled', false).html(originalHtml);
+        }
+    });
+}
+
+function initPuzzles(json) {
+    data = json
+    selectedData = data
+    ids = createIds(data)
+
+    // Clear existing select2 data if any
+    if (games.data('select2')) {
+        games.empty();
+    }
+
+    games.select2({
+        data: ids,
+        templateSelection: formatPuzzle,
+        templateResult: formatPuzzle
+    })
+
+    selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
+}
+
+loadData();
+
+$(".reload-data").click(function() {
+    loadData(true);
 });
 
 function formatPuzzle (state) {

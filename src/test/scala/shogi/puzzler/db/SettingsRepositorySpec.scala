@@ -32,9 +32,16 @@ class SettingsRepositorySpec extends AnyWordSpec with Matchers {
         loaded.shallowLimit shouldBe settings.shallowLimit
         loaded.deepLimit shouldBe settings.deepLimit
         loaded.winChanceDropThreshold shouldBe settings.winChanceDropThreshold
+        loaded.isConfigured shouldBe true
       } finally {
         // Cleanup if needed, though for local mongo it's usually fine
       }
+    }
+
+    "return isConfigured as false when settings are not in DB" in {
+      val nonExistentUser = "non-existent-" + java.util.UUID.randomUUID().toString
+      val loaded = Await.result(SettingsRepository.getAppSettings(Some(nonExistentUser)), 5.seconds)
+      loaded.isConfigured shouldBe false
     }
 
     "save and load individual double setting" in {

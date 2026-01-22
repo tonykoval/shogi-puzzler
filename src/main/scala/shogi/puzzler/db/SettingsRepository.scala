@@ -87,7 +87,7 @@ object SettingsRepository {
         shallow <- shallowF
         deep <- deepF
         threshold <- thresholdF
-      } yield AppSettings(lishogiNick, swarsNick, dojoNick, dojoPass, engine, shallow, deep, threshold)
+      } yield AppSettings(lishogiNick, swarsNick, dojoNick, dojoPass, engine, shallow, deep, threshold, isConfigured = false)
     }
 
     def fetchFromDoc(doc: Document): AppSettings = {
@@ -107,7 +107,8 @@ object SettingsRepository {
         enginePath = Option(doc.getString("engine_path")).getOrElse(config.getString("app.engine.path")),
         shallowLimit = Option(doc.getInteger("shallow_limit")).map(_.toInt).getOrElse(config.getInt("app.analysis.shallow-limit")),
         deepLimit = Option(doc.getInteger("deep_limit")).map(_.toInt).getOrElse(config.getInt("app.analysis.deep-limit")),
-        winChanceDropThreshold = threshold
+        winChanceDropThreshold = threshold,
+        isConfigured = true
       )
     }
 
@@ -115,11 +116,16 @@ object SettingsRepository {
     collection.find(Filters.equal("_id", id)).toFuture().flatMap { docs =>
       if (docs.nonEmpty) {
         Future.successful(fetchFromDoc(docs.head))
-      } else if (userEmail.isDefined) {
+      } else if (userEmail.isDefined && id != "global") {
         // Fallback to "global" doc
         collection.find(Filters.equal("_id", "global")).toFuture().flatMap { globalDocs =>
           if (globalDocs.nonEmpty) {
-            Future.successful(fetchFromDoc(globalDocs.head))
+            val globalSettings = fetchFromDoc(globalDocs.head)
+            // Even if we found global settings, they were not specifically configured for THIS user,
+            // so if this is a new user, we might still want to treat them as not configured?
+            // Actually, the requirement says "first time login (there is no config in DB), reroute to config page".
+            // If there's a global config but no user-specific config, it IS their first time.
+            Future.successful(globalSettings.copy(isConfigured = false))
           } else {
             fetchFromIndividualKeys()
           }
@@ -154,5 +160,6 @@ case class AppSettings(
   enginePath: String,
   shallowLimit: Int,
   deepLimit: Int,
-  winChanceDropThreshold: Double
+  winChanceDropThreshold: Double,
+  isConfigured: Boolean = false
 )

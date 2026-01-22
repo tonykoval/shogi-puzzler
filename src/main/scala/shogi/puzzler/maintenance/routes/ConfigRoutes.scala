@@ -37,7 +37,7 @@ object ConfigRoutes extends BaseRoutes {
   }
 
   def renderConfigPage(userEmail: Option[String], settings: AppSettings) = {
-    Components.layout("Configuration", userEmail, settings)(
+    Components.layout("Configuration", userEmail, settings, appVersion)(
       h1(cls := "mb-4")("Configuration"),
       div(cls := "card bg-dark text-light border-secondary")(
         div(cls := "card-body")(
@@ -81,10 +81,10 @@ object ConfigRoutes extends BaseRoutes {
       val targetUser = userEmail.getOrElse("global")
       logger.info(s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold")
       val encryptedPassword = CryptoUtil.encrypt(dojo81_password)
-      val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, encryptedPassword, engine_path, shallow_limit, deep_limit, win_chance_threshold)
+      val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, encryptedPassword, engine_path, shallow_limit, deep_limit, win_chance_threshold, isConfigured = true)
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
       
-      noCacheRedirect("/config")
+      noCacheRedirect("/my-games")
     }
   }
 

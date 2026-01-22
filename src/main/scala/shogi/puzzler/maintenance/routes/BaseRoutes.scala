@@ -36,6 +36,7 @@ abstract class BaseRoutes extends Routes {
   protected val config = ConfigFactory.load()
 
   protected val oauthEnabled = config.getBoolean("app.oauth.enabled")
+  protected val appVersion = shogi.puzzler.BuildInfo.version
   protected val oauthClientId = config.getString("app.oauth.google.client-id")
   protected val oauthClientSecret = config.getString("app.oauth.google.client-secret")
   protected val oauthRedirectUri = config.getString("app.oauth.google.redirect-uri")
@@ -45,7 +46,7 @@ abstract class BaseRoutes extends Routes {
       .stripPrefix("[").stripSuffix("]")
       .split(",")
       .map(_.trim)
-      .map(_.stripPrefix("\"").stripSuffix("\""))
+      .map(_.replaceAll("^[\"\\\\]+|[\"\\\\]+$", ""))
       .filter(_.nonEmpty)
       .toSet
     logger.info(s"[AUTH] Allowed emails: ${emails.mkString(", ")}")

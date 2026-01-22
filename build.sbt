@@ -3,10 +3,13 @@ ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalaVersion := "2.13.18"
 
 lazy val root = (project in file("."))
+  .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "shogi-puzzler",
     run / fork := true,
-    assembly / mainClass := Some("shogi.puzzler.maintenance.MaintenanceApp")
+    assembly / mainClass := Some("shogi.puzzler.maintenance.MaintenanceApp"),
+    buildInfoKeys := Seq[BuildInfoKey](name, version, scalaVersion, sbtVersion),
+    buildInfoPackage := "shogi.puzzler"
   )
 
 libraryDependencies ++= Seq(

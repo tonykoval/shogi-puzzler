@@ -8,16 +8,22 @@ case class TaskProgress(
     status: String, // "running", "completed", "failed"
     message: String,
     resultHtml: Option[String] = None,
-    error: Option[String] = None
+    error: Option[String] = None,
+    kifHash: Option[String] = None
 )
 
 object TaskManager {
   private val tasks = new ConcurrentHashMap[String, TaskProgress]()
 
-  def createTask(): String = {
+  def createTask(kifHash: Option[String] = None): String = {
     val id = UUID.randomUUID().toString
-    tasks.put(id, TaskProgress(id, "running", "Initializing..."))
+    tasks.put(id, TaskProgress(id, "running", "Initializing...", kifHash = kifHash))
     id
+  }
+
+  def getAllTasks: Seq[TaskProgress] = {
+    import scala.jdk.CollectionConverters._
+    tasks.values().asScala.toSeq
   }
 
   def updateProgress(id: String, message: String): Unit = {

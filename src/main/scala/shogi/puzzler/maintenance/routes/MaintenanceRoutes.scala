@@ -43,34 +43,39 @@ object MaintenanceRoutes extends BaseRoutes {
     })
   }
 
-  @cask.get("/maintenance")
+  @cask.get("/my-games")
   def index(player: Option[String] = None, search_text: Option[String] = None, request: cask.Request): cask.Response[String] = {
     val redirectOpt = if (oauthEnabled) redirectToConfiguredHostIfNeeded(request) else None
     redirectOpt.getOrElse {
       val initialPlayer = player.getOrElse(search_text.getOrElse(""))
-      logger.info(s"[MAINTENANCE] Dashboard accessed. Initial player: $initialPlayer")
       
       val userEmail = getSessionUserEmail(request)
       if (oauthEnabled && userEmail.isEmpty) {
-        logger.info(s"[MAINTENANCE] Redirecting to /login because userEmail is empty (oauthEnabled=$oauthEnabled)")
+        logger.info(s"[MY-GAMES] Redirecting to /login because userEmail is empty (oauthEnabled=$oauthEnabled)")
         noCacheRedirect("/login")
       } else {
         val targetEmail = if (oauthEnabled) userEmail else None
         val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
         
-        cask.Response(
-          renderMaintenancePage(initialPlayer, userEmail, settings).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
+        if (!settings.isConfigured) {
+          logger.info(s"[MY-GAMES] Redirecting to /config because settings are not configured for $targetEmail")
+          noCacheRedirect("/config")
+        } else {
+          cask.Response(
+            renderMaintenancePage(initialPlayer, userEmail, settings).render,
+            headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+          )
+        }
       }
     }
   }
 
   def renderMaintenancePage(initialPlayer: String = "", userEmail: Option[String] = None, settings: AppSettings) = {
     Components.layout(
-      "Maintenance Dashboard", 
+      "My Games Dashboard", 
       userEmail, 
       settings,
+      appVersion,
       scripts = Seq(
         script(src := "https://cdn.jsdelivr.net/npm/chart.js"),
         script(src := "/js/maintenance.js")
@@ -78,7 +83,12 @@ object MaintenanceRoutes extends BaseRoutes {
     )(
       div(cls := "d-flex justify-content-between align-items-center mb-4")(
         h1("Shogi Game Fetcher"),
-        a(href := "/viewer", cls := "btn btn-info")("Open Puzzle Viewer")
+        div(cls := "d-flex gap-2")(
+          button(cls := "btn btn-outline-warning reload-data", title := "Refresh data") (
+            i(cls := "bi bi-arrow-clockwise me-1"), "Refresh Data"
+          ),
+          a(href := "/viewer", cls := "btn btn-info")("Open Puzzle Viewer")
+        )
       ),
       Components.gameFetcherCard("Lishogi Games", "lishogi", settings.lishogiNickname, "Click 'Fetch' to load Lishogi games."),
       Components.gameFetcherCard("ShogiWars Games", "shogiwars", settings.shogiwarsNickname, "Click 'Fetch' to load ShogiWars games."),
@@ -107,6 +117,19 @@ object MaintenanceRoutes extends BaseRoutes {
     )
   }
 
+  @cask.get("/maintenance-tasks")
+  def listTasks() = {
+    val tasks = TaskManager.getAllTasks.map { t =>
+      ujson.Obj(
+        "id" -> t.id,
+        "status" -> t.status,
+        "message" -> t.message,
+        "kifHash" -> t.kifHash.map(ujson.Str).getOrElse(ujson.Null)
+      )
+    }
+    corsResponse(ujson.write(tasks))
+  }
+
   @cask.post("/maintenance-analyze")
   def analyze(request: cask.Request): cask.Response[String] = {
     val body = request.text()
@@ -133,7 +156,8 @@ object MaintenanceRoutes extends BaseRoutes {
           val userEmail = getSessionUserEmail(request)
           logger.info(s"[MAINTENANCE] Analysis request received for player: $player, source: $source, user: $userEmail")
           
-          val taskId = TaskManager.createTask()
+          val kifHash = GameRepository.md5Hash(kif)
+          val taskId = TaskManager.createTask(Some(kifHash))
           
           Future {
             try {
@@ -159,7 +183,7 @@ object MaintenanceRoutes extends BaseRoutes {
                 settings.deepLimit
               )
               
-              val kifHash = GameRepository.md5Hash(kif)
+              val kifHashFromRepo = GameRepository.md5Hash(kif)
               val exists = Await.result(GameRepository.exists(kif), 10.seconds)
               
               if (!exists) {
@@ -174,26 +198,26 @@ object MaintenanceRoutes extends BaseRoutes {
                   Await.result(GameRepository.saveGame(kif, gameDetails), 10.seconds)
                 } catch {
                   case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
-                    logger.info(s"[MAINTENANCE] Game $kifHash was just inserted by another request. Cleaning up old analysis...")
-                    Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+                    logger.info(s"[MAINTENANCE] Game $kifHashFromRepo was just inserted by another request. Cleaning up old analysis...")
+                    Await.result(GameRepository.deleteAnalysis(kifHashFromRepo), 10.seconds)
                 }
               } else {
-                logger.info(s"[MAINTENANCE] Game $kifHash already exists in DB. Cleaning up old analysis...")
-                Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+                logger.info(s"[MAINTENANCE] Game $kifHashFromRepo already exists in DB. Cleaning up old analysis...")
+                Await.result(GameRepository.deleteAnalysis(kifHashFromRepo), 10.seconds)
               }
               
-              logger.info(s"[MAINTENANCE] Found ${puzzles.size} puzzles for game $kifHash")
-              Await.result(GameRepository.markAsAnalyzed(kifHash), 10.seconds)
+              logger.info(s"[MAINTENANCE] Found ${puzzles.size} puzzles for game $kifHashFromRepo")
+              Await.result(GameRepository.markAsAnalyzed(kifHashFromRepo), 10.seconds)
               
               val scores = shallowResults.map(_.evaluationScore.forPlayer(Color.Sente).toNumeric)
-              Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
+              Await.result(GameRepository.saveScores(kifHashFromRepo, scores), 10.seconds)
               
               puzzles.foreach { p =>
                 val json = ujson.write(PuzzleJsonSerializer.puzzleToJson(p))
-                Await.result(GameRepository.savePuzzle(json, kifHash), 10.seconds)
+                Await.result(GameRepository.savePuzzle(json, kifHashFromRepo), 10.seconds)
               }
               
-              logger.info(s"[MAINTENANCE] Analysis complete for $kifHash. ${puzzles.size} puzzles found and saved.")
+              logger.info(s"[MAINTENANCE] Analysis complete for $kifHashFromRepo. ${puzzles.size} puzzles found and saved.")
               TaskManager.complete(taskId, s"Analysis complete. ${puzzles.size} puzzles found.")
             } catch {
               case e: Exception =>

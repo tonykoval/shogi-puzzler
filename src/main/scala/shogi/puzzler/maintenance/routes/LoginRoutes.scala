@@ -12,8 +12,8 @@ object LoginRoutes extends BaseRoutes {
       val host = request.headers.get("host").flatMap(_.headOption).getOrElse("unknown")
       logger.info(s"Login requested (Host: $host). Current user: ${getSessionUserEmail(request)}")
       if (oauthEnabled && getSessionUserEmail(request).isDefined) {
-        logger.info("User already logged in, redirecting to /maintenance")
-        noCacheRedirect("/maintenance")
+        logger.info("User already logged in, redirecting to /my-games")
+        noCacheRedirect("/my-games")
       } else {
         logger.info(s"Redirecting to Google OAuth from $host")
 
@@ -94,7 +94,7 @@ object LoginRoutes extends BaseRoutes {
       cask.Response(
         "",
         statusCode = 302,
-        headers = Seq("Location" -> "/maintenance") ++ noCacheHeaders,
+        headers = Seq("Location" -> "/my-games") ++ noCacheHeaders,
         cookies = Seq(
           cask.Cookie(
             name = "session",

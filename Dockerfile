@@ -35,53 +35,17 @@ WORKDIR /app
 
 # Install Playwright dependencies
 RUN apt-get update && apt-get install -y \
-    libglib2.0-0 \
-    libnss3 \
-    libnspr4 \
-    libdbus-1-3 \
-    libatk1.0-0 \
-    libatk-bridge2.0-0 \
-    libatspi2.0-0 \
-    libx11-6 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxrandr2 \
-    libgbm1 \
-    libdrm2 \
-    libxcb1 \
-    libxkbcommon0 \
-    libasound2 \
-    libcups2 \
-    libpango-1.0-0 \
-    libcairo2 \
-    libx11-xcb1 \
-    libxcursor1 \
-    libgtk-3-0 \
-    libpangocairo-1.0-0 \
-    libcairo-gobject2 \
-    libgdk-pixbuf-2.0-0 \
-    libgstreamer1.0-0 \
-    libgstreamer-plugins-base1.0-0 \
-    libatomic1 \
-    libxslt1.1 \
-    libwoff1 \
-    libvpx7 \
-    libevent-2.1-7 \
-    libopus0 \
-    libflite1 \
-    libwebpdemux2 \
-    libavif13 \
-    libharfbuzz-icu0 \
-    libwebpmux3 \
-    libenchant-2-2 \
-    libsecret-1-0 \
-    libhyphen0 \
-    libmanette-0.2-0 \
-    libgles2 \
-    libx264-dev \
+    curl \
+    gnupg \
+    && curl -sL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy the application fat JAR
+COPY --from=app-builder /build/target/scala-2.13/shogi-puzzler-assembly-*.jar ./app.jar
+
+# Install playwright browsers and their dependencies
+RUN java -cp app.jar com.microsoft.playwright.CLI install chromium --with-deps
 
 # Copy the engine from stage 1
 COPY --from=engine-builder /tmp/YaneuraOu/source/YaneuraOu-by-gcc ./engine/yaneuraou_linux
@@ -90,9 +54,6 @@ RUN chmod +x ./engine/yaneuraou_linux
 # Copy the eval folder from the repository
 # Putting it inside engine/ folder so it's next to the binary
 COPY eval/ ./engine/eval/
-
-# Copy the application fat JAR
-COPY --from=app-builder /build/target/scala-2.13/shogi-puzzler-assembly-*.jar ./app.jar
 
 # Set environment variables
 ENV ENGINE_PATH=engine/yaneuraou_linux

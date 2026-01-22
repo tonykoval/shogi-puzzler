@@ -13,12 +13,12 @@ object RootRoutes extends BaseRoutes {
   @cask.get("/")
   def index(request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      logger.info(s"Root accessed, redirecting to /maintenance. Cookies: ${request.cookies.keys.mkString(", ")}")
-      noCacheRedirect("/maintenance")
+      logger.info(s"Root accessed, redirecting to /my-games. Cookies: ${request.cookies.keys.mkString(", ")}")
+      noCacheRedirect("/my-games")
     }
   }
 
-  @cask.get("/maintenance-fallback", subpath = true)
+  @cask.get("/my-games-fallback", subpath = true)
   def catchAll(request: cask.Request): cask.Response[String] = {
     val path = request.remainingPathSegments.mkString("/")
     logger.info(s"Catch-all route: path=$path params=${request.queryParams}")

@@ -26,6 +26,7 @@ object DemoRoutes extends BaseRoutes {
       "Maintenance Demo", 
       userEmail, 
       settings,
+      appVersion,
       scripts = Seq(
         script(src := "https://cdn.jsdelivr.net/npm/chart.js"),
         script(src := "/js/maintenance.js")
