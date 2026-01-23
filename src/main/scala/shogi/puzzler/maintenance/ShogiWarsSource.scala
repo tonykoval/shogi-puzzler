@@ -58,33 +58,41 @@ object ShogiWarsSource extends GameSource {
       val records = data("records").arr
       
       logger.info(s"[SHOGIWARS] API returned ${records.length} records")
-      val count = Math.min(records.length, limit)
-      onProgress(s"Found ${records.length} records. Fetching KIFs for $count games...")
+      onProgress(s"Found ${records.length} records. Processing (limit new: $limit)...")
 
       import shogi.puzzler.db.GameRepository
       import scala.concurrent.Await
       import scala.concurrent.duration._
 
-      val results = records.zipWithIndex.flatMap { case (r, idx) =>
-        val key = r("key").str
-        val sente = cleanPlayerName(r("player_info")("black")("name").str)
-        val gote = cleanPlayerName(r("player_info")("white")("name").str)
-        val date = r("battled_at").str.split("T").head // Simple date extraction
-
-        if (skipExisting) {
-          val exists = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds).isDefined
-          if (exists) {
-            logger.info(s"[SHOGIWARS] Skipping existing game $key ($sente vs $gote $date)")
-            None
-          } else {
-            fetchGameKif(context, key, sente, gote, date, idx, count, onProgress)
-          }
+      var foundNewGames = 0
+      val results = records.flatMap { r =>
+        if (foundNewGames >= limit) {
+          None
         } else {
-          fetchGameKif(context, key, sente, gote, date, idx, count, onProgress)
+          val key = r("key").str
+          val sente = cleanPlayerName(r("player_info")("black")("name").str)
+          val gote = cleanPlayerName(r("player_info")("white")("name").str)
+          val date = r("battled_at").str.split("T").head // Simple date extraction
+
+          val (existingGame, isAnalyzed) = if (skipExisting) {
+            val dbG = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds)
+            (dbG, dbG.exists(_.get("is_analyzed").exists(_.asBoolean().getValue)))
+          } else {
+            (None, false)
+          }
+
+          if (skipExisting && existingGame.isDefined) {
+            logger.info(s"[SHOGIWARS] Skipping existing game $key ($sente vs $gote $date)")
+            Some(SearchGame(sente, gote, date, None, existsInDb = true, isAnalyzed = isAnalyzed, site = Some("shogiwars")))
+          } else {
+            val res = fetchGameKif(context, key, sente, gote, date, foundNewGames, limit, onProgress)
+            foundNewGames += 1
+            res
+          }
         }
       }.toSeq
 
-      results.take(limit)
+      results
 
     } catch {
       case e: Exception =>

@@ -42,10 +42,17 @@ object ConfigRoutes extends BaseRoutes {
       div(cls := "card bg-dark text-light border-secondary")(
         div(cls := "card-body")(
           form(action := "/config", method := "post")(
-            Components.configField("Lishogi Nickname", "lishogi_nickname", settings.lishogiNickname),
-            Components.configField("ShogiWars Nickname", "shogiwars_nickname", settings.shogiwarsNickname),
-            Components.configField("81Dojo Nickname", "dojo81_nickname", settings.dojo81Nickname),
-            Components.configField("81Dojo Password", "dojo81_password", CryptoUtil.decrypt(settings.dojo81Password), "password"),
+            div(cls := "row")(
+              div(cls := "col-md-4")(
+                Components.configField("Lishogi Nickname", "lishogi_nickname", settings.lishogiNickname)
+              ),
+              div(cls := "col-md-4")(
+                Components.configField("ShogiWars Nickname", "shogiwars_nickname", settings.shogiwarsNickname)
+              ),
+              div(cls := "col-md-4")(
+                Components.configField("81Dojo Nickname", "dojo81_nickname", settings.dojo81Nickname)
+              )
+            ),
             div(cls := "mb-3")(
               label(cls := "form-label")("Engine"),
               select(name := "engine_path", cls := "form-select bg-dark text-light border-secondary")(
@@ -65,7 +72,7 @@ object ConfigRoutes extends BaseRoutes {
                 Components.configField("Win Chance Drop Threshold", "win_chance_threshold", settings.winChanceDropThreshold.toString, "number", Some("any"))
               )
             ),
-            button(`type` := "submit", cls := "btn btn-primary")("Save Configuration")
+            button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")("Save Configuration")
           )
         )
       )
@@ -73,15 +80,14 @@ object ConfigRoutes extends BaseRoutes {
   }
 
   @cask.postForm("/config")
-  def saveConfig(lishogi_nickname: String, shogiwars_nickname: String, dojo81_nickname: String, dojo81_password: String, engine_path: String, shallow_limit: Int, deep_limit: Int, win_chance_threshold: Double, request: cask.Request) = {
+  def saveConfig(lishogi_nickname: String, shogiwars_nickname: String, dojo81_nickname: String, engine_path: String, shallow_limit: Int, deep_limit: Int, win_chance_threshold: Double, request: cask.Request) = {
     val userEmail = getSessionUserEmail(request)
     if (oauthEnabled && userEmail.isEmpty) {
       noCacheRedirect("/login")
     } else {
       val targetUser = userEmail.getOrElse("global")
       logger.info(s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold")
-      val encryptedPassword = CryptoUtil.encrypt(dojo81_password)
-      val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, encryptedPassword, engine_path, shallow_limit, deep_limit, win_chance_threshold, isConfigured = true)
+      val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, engine_path, shallow_limit, deep_limit, win_chance_threshold, isConfigured = true)
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
       
       noCacheRedirect("/my-games")

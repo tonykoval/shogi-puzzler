@@ -7,32 +7,33 @@ import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
-object ViewerRoutes extends BaseRoutes {
+object PublicViewerRoutes extends BaseRoutes {
 
-  @cask.get("/viewer")
-  def viewer(hash: Option[String] = None, request: cask.Request) = {
+  @cask.get("/puzzles")
+  def publicViewer(request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
+      // No auth required for public puzzles
       val userEmail = getSessionUserEmail(request)
-      if (oauthEnabled && userEmail.isEmpty) {
-        logger.info(s"[VIEWER] Redirecting to /login because userEmail is empty")
-        noCacheRedirect("/login")
-      } else {
-        val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-        cask.Response(
-          renderViewer(userEmail, settings).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
+      // We still want settings for some UI parts, but we can use a default if not logged in
+      val settings = userEmail match {
+        case Some(email) => Await.result(SettingsRepository.getAppSettings(Some(email)), 10.seconds)
+        case None => AppSettings.default
       }
+      
+      cask.Response(
+        renderPublicViewer(userEmail, settings).render,
+        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+      )
     }
   }
 
-  def renderViewer(userEmail: Option[String] = None, settings: AppSettings) = {
+  def renderPublicViewer(userEmail: Option[String] = None, settings: AppSettings) = {
     html(lang := "en", cls := "dark", style := "--zoom:90;")(
       head(
         meta(charset := "utf-8"),
         meta(name := "viewport", content := "width=device-width,initial-scale=1,viewport-fit=cover"),
         meta(name := "theme-color", content := "#2e2a24"),
-        tag("title")("Shogi puzzle"),
+        tag("title")("Public Shogi Puzzles"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"),
         link(rel := "stylesheet", href := "/assets/css/shogiground.css"),
         link(rel := "stylesheet", href := "/assets/css/portella.css"),
@@ -68,15 +69,6 @@ object ViewerRoutes extends BaseRoutes {
                       button(cls := "btn btn-outline-secondary next-puzzle", title := "Next Puzzle") (
                         i(cls := "bi bi-chevron-right")
                       )
-                    ),
-                    div(cls := "mt-2")(
-                      div(cls := "form-check form-switch")(
-                        input(cls := "form-check-input", `type` := "checkbox", id := "isPublicCheckbox"),
-                        label(cls := "form-check-label text-light", `for` := "isPublicCheckbox")("Public Puzzle")
-                      )
-                    ),
-                    button(cls := "btn btn-sm btn-outline-warning reload-data w-100 mt-2", title := "Reload data from DB") (
-                      i(cls := "bi bi-arrow-clockwise me-1"), "Reload Data"
                     )
                   )
                 ),
@@ -105,9 +97,7 @@ object ViewerRoutes extends BaseRoutes {
                   div(cls := "content")("Play the correct move!"),
                   div(id := "turn-text", cls := "badge bg-secondary mb-1")("-"),
                   div(id := "players-text", cls := "text-muted mb-3", style := "font-size: 0.8rem;")("-"),
-                  div(id := "material-text", style := "display:none")("-"),
-                  textarea(cls := "content mt-2 form-control", style := "display:none")(),
-                  button(cls := "btn btn-primary save-comment mt-2", style := "display:none")("Save Comment")
+                  div(id := "material-text", style := "display:none")("-")
                 )
               )
             )
@@ -123,39 +113,17 @@ object ViewerRoutes extends BaseRoutes {
     )
   }
 
-  @cask.get("/data")
-  def puzzles(hash: Option[String] = None) = {
-    val puzzles = hash match {
-      case Some(h) => Await.result(GameRepository.getPuzzlesForGame(h), 10.seconds)
-      case None => Await.result(GameRepository.getAllPuzzles(), 10.seconds)
-    }
+  @cask.get("/public-data")
+  def publicPuzzles() = {
+    val puzzles = Await.result(GameRepository.getPublicPuzzles(), 10.seconds)
     
-    val sortedPuzzles = puzzles.sortBy { doc =>
-      doc.get("move_number").map { v =>
-        if (v.isInt32) v.asInt32().getValue
-        else if (v.isInt64) v.asInt64().getValue.toInt
-        else if (v.isDouble) v.asDouble().getValue.toInt
-        else 0
-      }.getOrElse(0)
-    }
-
-    val jsonArray = sortedPuzzles.map { doc =>
+    val jsonArray = puzzles.map { doc =>
       ujson.read(doc.toJson())
     }
     cask.Response(
       ujson.write(jsonArray),
       headers = Seq("Content-Type" -> "application/json")
     )
-  }
-
-  @cask.post("/viewer/toggle-public")
-  def togglePublic(request: cask.Request) = {
-    val json = ujson.read(request.text())
-    val id = json("id").str
-    val isPublic = json("isPublic").bool
-    
-    Await.result(GameRepository.togglePuzzlePublic(id, isPublic), 10.seconds)
-    cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
   }
 
   initialize()

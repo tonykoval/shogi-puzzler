@@ -27,14 +27,17 @@ object Dojo81Source extends GameSource {
 
     onProgress("Loading 81Dojo settings...")
     val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-    val username = settings.dojo81Nickname
-    val password = shogi.puzzler.util.CryptoUtil.decrypt(settings.dojo81Password)
+    
+    val username = config.getString("app.fetcher.tech_dojo81.username")
+    val password = config.getString("app.fetcher.tech_dojo81.password")
 
-    if (username.isEmpty || password.isEmpty || username == "dojo81_user") {
-      logger.error(s"[81DOJO] Username or password not configured for user: ${userEmail.getOrElse("global")}")
-      onProgress("81Dojo credentials not configured.")
+    if (username.isEmpty || password.isEmpty) {
+      logger.error(s"[81DOJO] Technical account credentials (tech_dojo81) not configured in application.conf")
+      onProgress("81Dojo technical account not configured.")
       return Seq.empty
     }
+
+    import shogi.puzzler.db.GameRepository
 
     var playwright: Playwright = null
     var browser: Browser = null
@@ -77,312 +80,347 @@ object Dojo81Source extends GameSource {
         throw new RuntimeException(s"Login failed: $errorMsg")
       }
 
-      onProgress("Login successful. Navigating to search form...")
+      onProgress("Login successful.")
       logger.info("[81DOJO] Login successful")
 
-      val searchUrl = "https://system.81dojo.com/en/kifus/search/form"
-      logger.info(s"[81DOJO] Navigating to search form: $searchUrl")
-      page.navigate(searchUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD))
+      // If we are already on a page with a game list (e.g. user home), we might be able to find games there.
+      // But the user said "Navigating to search form: https://system.81dojo.com/en/kifus/search/form" is where it currently goes.
+      // Let's check if the current page has the games table first.
+      var rows = page.locator("table.list tbody tr").all().asScala
+      if (rows.isEmpty) {
+        onProgress("Navigating to search form...")
+        val searchUrl = "https://system.81dojo.com/en/kifus/search/form"
+        logger.info(s"[81DOJO] Navigating to search form: $searchUrl")
+        page.navigate(searchUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD))
 
-      onProgress(s"Searching for games of $playerName...")
-      page.fill("input[name='conditions[player1]']", playerName)
-      page.click("input[type='submit']")
+        onProgress(s"Searching for games of $playerName...")
+        page.fill("input[name='conditions[player1]']", playerName)
+        page.click("input[type='submit']")
 
-      // Wait for results
-      try {
-        page.waitForSelector("table.list tbody tr", new Page.WaitForSelectorOptions().setTimeout(60000))
+        // Wait for results
+        try {
+          page.waitForSelector("table.list tbody tr", new Page.WaitForSelectorOptions().setTimeout(60000))
 
-        // Wait for the number of rows to stabilize (it might be loading incrementally)
-        var lastCount = 0
-        var currentCount = page.locator("table.list tbody tr").count()
-        var stabilityCount = 0
-        val maxStabilityWait = 10 // 5 seconds total (10 * 1000ms / 2? No, 10 * 1000ms)
+          // Wait for the number of rows to stabilize (it might be loading incrementally)
+          var lastCount = 0
+          var currentCount = page.locator("table.list tbody tr").count()
+          var stabilityCount = 0
+          val maxStabilityWait = 10 // 5 seconds total (10 * 1000ms / 2? No, 10 * 1000ms)
 
-        while (stabilityCount < 3 && stabilityCount < maxStabilityWait) {
-          onProgress(s"Waiting for results to stabilize ($currentCount rows found)...")
-          if (currentCount > 0 && currentCount == lastCount) {
-            stabilityCount += 1
-          } else {
-            stabilityCount = 0
+          while (stabilityCount < 3 && stabilityCount < maxStabilityWait) {
+            onProgress(s"Waiting for results to stabilize ($currentCount rows found)...")
+            if (currentCount > 0 && currentCount == lastCount) {
+              stabilityCount += 1
+            } else {
+              stabilityCount = 0
+            }
+            lastCount = currentCount
+            page.waitForTimeout(1000)
+            currentCount = page.locator("table.list tbody tr").count()
           }
-          lastCount = currentCount
-          page.waitForTimeout(1000)
-          currentCount = page.locator("table.list tbody tr").count()
-        }
 
-        logger.info(s"[81DOJO] Rows stabilized at $currentCount")
-      } catch {
-        case e: Exception =>
-          logger.error(s"[81DOJO] Search results (rows) not found: ${e.getMessage}")
-          onProgress("Search results not found.")
-          // Take screenshot for debugging
-          val screenshotPath = java.nio.file.Paths.get("81dojo_search_error.png")
-          page.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
-          throw e
+          logger.info(s"[81DOJO] Rows stabilized at $currentCount")
+        } catch {
+          case e: Exception =>
+            logger.error(s"[81DOJO] Search results (rows) not found: ${e.getMessage}")
+            onProgress("Search results not found.")
+            // Take screenshot for debugging
+            val screenshotPath = java.nio.file.Paths.get("81dojo_search_error.png")
+            page.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+            throw e
+        }
+        rows = page.locator("table.list tbody tr").all().asScala
       }
 
-      val rows = page.locator("table.list tbody tr").all().asScala
       val validRows = rows.filter(r => r.locator("td").count() >= 8)
       logger.info(s"[81DOJO] Found ${rows.size} rows, ${validRows.size} valid games (limit requested: $limit)")
       
-      val count = Math.min(validRows.size, limit)
-      onProgress(s"Found $count valid games. Fetching detail pages...")
+      // Log all found valid games for debugging
+      validRows.foreach { row =>
+        val cells = row.locator("td").all().asScala
+        if (cells.size >= 8) {
+          val date = cells(1).innerText().split("\n").head.trim
+          val playersText = cells(2).innerText()
+          val players = playersText.split("\n")
+          val sente = if (players.length >= 1) players(0).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
+          val gote = if (players.length >= 2) players(1).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
+          logger.info(s"[81DOJO] Found game in table: $sente vs $gote on $date")
+        }
+      }
+      
+      onProgress(s"Found ${validRows.size} valid games. Fetching detail pages (limit: $limit)...")
 
       val detailPage = context.newPage()
       try {
-        validRows.take(limit).zipWithIndex.flatMap { case (row, idx) =>
+        var foundNewGames = 0
+        validRows.zipWithIndex.flatMap { case (row, idx) =>
           try {
-            val cells = row.locator("td").all().asScala
-            if (cells.size < 8) {
+            if (foundNewGames >= limit) {
               None
             } else {
-              val date = cells(1).innerText().split("\n").head.trim
+              val cells = row.locator("td").all().asScala
+              if (cells.size < 8) {
+                None
+              } else {
+                val date = cells(1).innerText().split("\n").head.trim
 
-              // Player cell contains both sente and gote
-              // e.g. "☗1761  snowpiercerr\n☖1350  Tonyko"
-              val playersText = cells(2).innerText()
-              val players = playersText.split("\n")
-              val sente = if (players.length >= 1) players(0).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
-              val gote = if (players.length >= 2) players(1).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
+                // Player cell contains both sente and gote
+                // e.g. "☗1761  snowpiercerr\n☖1350  Tonyko"
+                val playersText = cells(2).innerText()
+                val players = playersText.split("\n")
+                val sente = if (players.length >= 1) players(0).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
+                val gote = if (players.length >= 2) players(1).replaceAll("^[☗☖]", "").trim.split("\\s+").last else "Unknown"
 
-              onProgress(s"[$idx/$count] Fetching detail for $sente vs $gote ($date)...")
+                val dbG = Await.result(GameRepository.findByMetadata(sente, gote, date), 10.seconds)
+                val isAnalyzed = dbG.exists(_.get("is_analyzed").exists(_.asBoolean().getValue))
 
-              val gameDetailLink = cells(7).locator("a").first()
-              val gameUrl = gameDetailLink.getAttribute("href")
-              val absoluteGameUrl = {
-                val base = if (gameUrl.startsWith("http")) gameUrl else "https://system.81dojo.com" + (if (gameUrl.startsWith("/")) "" else "/") + gameUrl
-                if (base.contains("/en/kifus/")) base.replace("/en/kifus/", "/kifus/") + (if (base.contains("?")) "&" else "?") + "locale=en"
-                else base
-              }
+                if (dbG.isDefined) {
+                  onProgress(s"Row $idx: Skipping $sente vs $gote ($date) - already in DB.")
+                  logger.info(s"[81DOJO] MATCH FOUND IN DB: $sente vs $gote ($date) - Skipping.")
+                  Some(SearchGame(sente, gote, date, None, existsInDb = true, isAnalyzed = isAnalyzed, site = Some("81dojo")))
+                } else {
+                  logger.info(s"[81DOJO] NEW GAME (not in DB): $sente vs $gote ($date)")
+                  foundNewGames += 1
+                  onProgress(s"[$foundNewGames/$limit] Fetching detail for $sente vs $gote ($date)...")
 
-              logger.info(s"[81DOJO] Navigating to game detail: $absoluteGameUrl")
-              val headers = new java.util.HashMap[String, String]()
-              headers.put("Referer", "https://system.81dojo.com/en/kifus/search/form")
-              detailPage.setExtraHTTPHeaders(headers)
-              detailPage.navigate(absoluteGameUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD).setTimeout(60000))
-              
-              // Extract KIF
-              val kif = try {
-                onProgress(s"[$idx/$count] Extracting KIF for $sente vs $gote...")
-                // The 81Dojo viewer is in a cross-origin iframe named 'viewer_frame'
-                // We need to click the Menu button first to make the Copy button visible
-                val menuSelector = "#kifuMenuButton"
-                val copySelector = "#kifuCopyButton"
-                
-                var foundKif: String = null
-                
-                // Wait for the iframe to appear
-                var viewerFrame: Frame = null
-                
-                // Try several times to find the frame as it might load dynamically
-                var attempts = 0
-                while (viewerFrame == null && attempts < 10) {
-                   val allFrames = detailPage.frames().asScala
-                   viewerFrame = allFrames.find(f => 
-                     f != detailPage.mainFrame() && (
-                       (f.name() == "viewer_frame") || 
-                       (f.url().contains("81dojo.com") && (f.url().contains("kifus") || f.url().contains("secure_client") || f.url().contains("viewer")))
-                     )
-                   ).orNull
-                   
-                   if (viewerFrame == null) {
-                     detailPage.waitForTimeout(2000)
-                     attempts += 1
-                   }
-                }
+                  val gameDetailLink = cells(7).locator("a").first()
+                  val gameUrl = gameDetailLink.getAttribute("href")
+                  val absoluteGameUrl = {
+                    val base = if (gameUrl.startsWith("http")) gameUrl else "https://system.81dojo.com" + (if (gameUrl.startsWith("/")) "" else "/") + gameUrl
+                    if (base.contains("/en/kifus/")) base.replace("/en/kifus/", "/kifus/") + (if (base.contains("?")) "&" else "?") + "locale=en"
+                    else base
+                  }
 
-                if (viewerFrame == null) {
-                   logger.warn(s"[81DOJO] Shogi viewer frame not found for $absoluteGameUrl after $attempts attempts")
-                }
-                
-                if (viewerFrame != null) {
-                   try {
-                     // Intercept clipboard write attempts in the frame
-                     val interceptScript = """() => {
-                       window._lastClipboardText = null;
-                       if (navigator.clipboard && !navigator.clipboard.originalWriteText) {
-                         navigator.clipboard.originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
-                       }
-                       if (navigator.clipboard) {
-                         navigator.clipboard.writeText = async (text) => {
-                           window._lastClipboardText = text;
-                           return navigator.clipboard.originalWriteText(text);
-                         };
-                       }
-                     }"""
-                     viewerFrame.evaluate(interceptScript)
-                     
-                     // Ensure the frame is focused and ready
-                     viewerFrame.focus("body")
-                     
-                     logger.info(s"[81DOJO] Clicking Kifu menu in frame '${viewerFrame.name()}' for $absoluteGameUrl")
-                     
-                     // Try to find the button with multiple possible selectors just in case
-                     val menuSelectors = Array("#kifuMenuButton", "button:has-text('Kifu')", "div:has-text('Kifu')", "button:has-text('棋譜')", "div:has-text('棋譜')")
-                     var menuClicked = false
+                  logger.info(s"[81DOJO] Navigating to game detail: $absoluteGameUrl")
+                  val headers = new java.util.HashMap[String, String]()
+                  headers.put("Referer", "https://system.81dojo.com/en/kifus/search/form")
+                  detailPage.setExtraHTTPHeaders(headers)
+                  detailPage.navigate(absoluteGameUrl, new Page.NavigateOptions().setWaitUntil(WaitUntilState.LOAD).setTimeout(60000))
+                  
+                  // Extract KIF
+                  val kif = try {
+                    onProgress(s"[$foundNewGames/$limit] Extracting KIF for $sente vs $gote...")
+                    // The 81Dojo viewer is in a cross-origin iframe named 'viewer_frame'
+                    // We need to click the Menu button first to make the Copy button visible
+                    val menuSelector = "#kifuMenuButton"
+                    val copySelector = "#kifuCopyButton"
                     
-                     for (selector <- menuSelectors if !menuClicked) {
-                        try {
-                           viewerFrame.waitForSelector(selector, new Frame.WaitForSelectorOptions().setTimeout(5000).setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE))
-                           viewerFrame.click(selector)
-                           menuClicked = true
-                        } catch {
-                           case _: Exception => // try next
-                        }
-                     }
+                    var foundKif: String = null
                     
-                     if (menuClicked) {
-                        logger.info(s"[81DOJO] Clicking Copy Kifu in frame for $absoluteGameUrl")
-                        val copySelectors = Array("#kifuCopyButton", "button:has-text('Copy')", "div:has-text('Copy')", "button:has-text('コピー')", "div:has-text('コピー')")
-                        var copyClicked = false
+                    // Wait for the iframe to appear
+                    var viewerFrame: Frame = null
+                    
+                    // Try several times to find the frame as it might load dynamically
+                    var attempts = 0
+                    while (viewerFrame == null && attempts < 10) {
+                      val allFrames = detailPage.frames().asScala
+                      viewerFrame = allFrames.find(f => 
+                        f != detailPage.mainFrame() && (
+                          (f.name() == "viewer_frame") || 
+                          (f.url().contains("81dojo.com") && (f.url().contains("kifus") || f.url().contains("secure_client") || f.url().contains("viewer")))
+                        )
+                      ).orNull
+                      
+                      if (viewerFrame == null) {
+                        detailPage.waitForTimeout(2000)
+                        attempts += 1
+                      }
+                    }
+
+                    if (viewerFrame == null) {
+                      logger.warn(s"[81DOJO] Shogi viewer frame not found for $absoluteGameUrl after $attempts attempts")
+                    }
+                    
+                    if (viewerFrame != null) {
+                      try {
+                        // Intercept clipboard write attempts in the frame
+                        val interceptScript = """() => {
+                          window._lastClipboardText = null;
+                          if (navigator.clipboard && !navigator.clipboard.originalWriteText) {
+                            navigator.clipboard.originalWriteText = navigator.clipboard.writeText.bind(navigator.clipboard);
+                          }
+                          if (navigator.clipboard) {
+                            navigator.clipboard.writeText = async (text) => {
+                              window._lastClipboardText = text;
+                              return navigator.clipboard.originalWriteText(text);
+                            };
+                          }
+                        }"""
+                        viewerFrame.evaluate(interceptScript)
                         
-                        for (selector <- copySelectors if !copyClicked) {
-                           try {
+                        // Ensure the frame is focused and ready
+                        viewerFrame.focus("body")
+                        
+                        logger.info(s"[81DOJO] Clicking Kifu menu in frame '${viewerFrame.name()}' for $absoluteGameUrl")
+                        
+                        // Try to find the button with multiple possible selectors just in case
+                        val menuSelectors = Array("#kifuMenuButton", "button:has-text('Kifu')", "div:has-text('Kifu')", "button:has-text('棋譜')", "div:has-text('棋譜')")
+                        var menuClicked = false
+                        
+                        for (selector <- menuSelectors if !menuClicked) {
+                            try {
                               viewerFrame.waitForSelector(selector, new Frame.WaitForSelectorOptions().setTimeout(5000).setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE))
                               viewerFrame.click(selector)
-                              copyClicked = true
-                           } catch {
+                              menuClicked = true
+                            } catch {
                               case _: Exception => // try next
-                           }
+                            }
                         }
                         
-                        if (copyClicked) {
-                           detailPage.waitForTimeout(2000)
-                           foundKif = viewerFrame.evaluate("window._lastClipboardText").asInstanceOf[String]
-                        }
-                     } else {
-                        logger.warn(s"[81DOJO] Could not find or click Kifu menu for $absoluteGameUrl")
-                     }
-                   } catch {
-                     case e: Exception => 
-                       logger.warn(s"[81DOJO] Error interacting with frame: ${e.getMessage}")
-                       // Take a screenshot of the frame if possible
-                       try {
-                          val timestamp = System.currentTimeMillis()
-                          // Check if directory exists or just use a path that we know is writable
-                          val screenshotPath = java.nio.file.Paths.get(s"81dojo_frame_error_$timestamp.png")
-                          viewerFrame.page().screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
-                       } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
-                   }
-                }
-                
-                // Fallback to searching all frames and shadow roots if the above failed
-                val extractionScript = """async () => {
-                   const extractFromDocument = async (win, doc) => {
-                     // 1. Check intercepted clipboard text
-                     if (win._lastClipboardText) {
-                       const text = win._lastClipboardText;
-                       if (text && (text.includes('Start-Date') || (text.includes('先手') && text.includes('指手')))) {
-                         return text;
-                       }
-                     }
-
-                     // 2. Try to read from clipboard if button was clicked
-                     try {
-                        if (win.navigator && win.navigator.clipboard) {
-                           const clipText = await win.navigator.clipboard.readText();
-                           if (clipText && (clipText.includes('Start-Date') || (clipText.includes('先手') && clipText.includes('指手')))) {
-                              return clipText;
-                           }
-                        }
-                     } catch (e) {
-                        // Clipboard might fail due to focus or permissions
-                     }
-
-                     // 2. Check common textareas (including those in shadow roots)
-                     const getAllTextareas = (root) => {
-                       let results = Array.from(root.querySelectorAll('textarea'));
-                       const all = root.querySelectorAll('*');
-                       for (const el of all) {
-                         try {
-                           if (el.shadowRoot) {
-                             results = results.concat(getAllTextareas(el.shadowRoot));
-                           }
-                         } catch (e) {}
-                       }
-                       return results;
-                     };
-
-                     const areas = getAllTextareas(doc);
-                     for (const area of areas) {
-                       if (area.value && (area.value.includes('Sente') || area.value.includes('Gote') || area.value.includes('Start-Date') || area.value.includes('後手') || area.value.includes('先手'))) {
-                         return area.value;
-                       }
-                     }
-                     
-                     // 3. Check if it's in a div or pre that might be visible now
-                     const getAllContainers = (root) => {
-                       let results = Array.from(root.querySelectorAll('div, pre, code'));
-                       const all = root.querySelectorAll('*');
-                       for (const el of all) {
-                         try {
-                           if (el.shadowRoot) {
-                             results = results.concat(getAllContainers(el.shadowRoot));
-                           }
-                         } catch (e) {}
-                       }
-                       return results;
-                     };
-
-                     const potentialContainers = getAllContainers(doc);
-                     for (const el of potentialContainers) {
-                        const text = el.textContent;
-                        if (text && text.length > 100 && (text.includes('Start-Date') || (text.includes('先手') && text.includes('指手')))) {
-                           return text;
-                        }
-                     }
-
-                     // 4. Check global variables
-                     if (win._kifu_data) return win._kifu_data;
-                     if (win.kifu_data) return win.kifu_data;
-                     if (win.KIF_DATA) return win.KIF_DATA;
-                     
-                     return null;
-                   };
-
-                   return await extractFromDocument(window, document);
-                }"""
-
-                if (foundKif == null || foundKif.isEmpty) {
-                   foundKif = detailPage.evaluate(extractionScript).asInstanceOf[String]
-                }
-                
-                if (foundKif == null || foundKif.isEmpty) {
-                   // Fallback: Try evaluating in each frame separately (handles cross-origin better)
-                   val allFrames = detailPage.frames().asScala
-                   for (frame <- allFrames if foundKif == null || foundKif.isEmpty) {
-                      try {
-                        foundKif = frame.evaluate(extractionScript).asInstanceOf[String]
-                        if (foundKif != null && !foundKif.isEmpty) {
-                           logger.info(s"[81DOJO] KIF found in frame '${frame.name()}' for $absoluteGameUrl")
+                        if (menuClicked) {
+                            logger.info(s"[81DOJO] Clicking Copy Kifu in frame for $absoluteGameUrl")
+                            val copySelectors = Array("#kifuCopyButton", "button:has-text('Copy')", "div:has-text('Copy')", "button:has-text('コピー')", "div:has-text('コピー')")
+                            var copyClicked = false
+                            
+                            for (selector <- copySelectors if !copyClicked) {
+                              try {
+                                  viewerFrame.waitForSelector(selector, new Frame.WaitForSelectorOptions().setTimeout(5000).setState(com.microsoft.playwright.options.WaitForSelectorState.VISIBLE))
+                                  viewerFrame.click(selector)
+                                  copyClicked = true
+                              } catch {
+                                  case _: Exception => // try next
+                              }
+                            }
+                            
+                            if (copyClicked) {
+                              detailPage.waitForTimeout(2000)
+                              foundKif = viewerFrame.evaluate("window._lastClipboardText").asInstanceOf[String]
+                            }
+                        } else {
+                            logger.warn(s"[81DOJO] Could not find or click Kifu menu for $absoluteGameUrl")
                         }
                       } catch {
-                        case _: Exception => // ignore
+                        case e: Exception => 
+                          logger.warn(s"[81DOJO] Error interacting with frame: ${e.getMessage}")
+                          // Take a screenshot of the frame if possible
+                          try {
+                              val timestamp = System.currentTimeMillis()
+                              // Check if directory exists or just use a path that we know is writable
+                              val screenshotPath = java.nio.file.Paths.get(s"81dojo_frame_error_$timestamp.png")
+                              viewerFrame.page().screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+                          } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
                       }
-                   }
-                }
-                
-                if (foundKif == null || foundKif.isEmpty) {
-                   logger.warn(s"[81DOJO] KIF button clicked but no KIF content found for $absoluteGameUrl")
-                   // Take screenshot for debugging
-                   val timestamp = System.currentTimeMillis()
-                   val screenshotPath = java.nio.file.Paths.get(s"81dojo_kif_error_$timestamp.png")
-                   try {
-                     detailPage.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
-                   } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
-                }
+                    }
+                    
+                    // Fallback to searching all frames and shadow roots if the above failed
+                    val extractionScript = """async () => {
+                      const extractFromDocument = async (win, doc) => {
+                        // 1. Check intercepted clipboard text
+                        if (win._lastClipboardText) {
+                          const text = win._lastClipboardText;
+                          if (text && (text.includes('Start-Date') || (text.includes('先手') && text.includes('指手')))) {
+                            return text;
+                          }
+                        }
 
-                Option(foundKif).filter(_.nonEmpty)
-              } catch {
-                case e: Exception =>
-                  logger.warn(s"[81DOJO] Could not extract KIF for $absoluteGameUrl: ${e.getMessage}")
-                  None
+                        // 2. Try to read from clipboard if button was clicked
+                        try {
+                            if (win.navigator && win.navigator.clipboard) {
+                              const clipText = await win.navigator.clipboard.readText();
+                              if (clipText && (clipText.includes('Start-Date') || (clipText.includes('先手') && clipText.includes('指手')))) {
+                                  return clipText;
+                              }
+                            }
+                        } catch (e) {
+                            // Clipboard might fail due to focus or permissions
+                        }
+
+                        // 2. Check common textareas (including those in shadow roots)
+                        const getAllTextareas = (root) => {
+                          let results = Array.from(root.querySelectorAll('textarea'));
+                          const all = root.querySelectorAll('*');
+                          for (const el of all) {
+                            try {
+                              if (el.shadowRoot) {
+                                results = results.concat(getAllTextareas(el.shadowRoot));
+                              }
+                            } catch (e) {}
+                          }
+                          return results;
+                        };
+
+                        const areas = getAllTextareas(doc);
+                        for (const area of areas) {
+                          if (area.value && (area.value.includes('Sente') || area.value.includes('Gote') || area.value.includes('Start-Date') || area.value.includes('後手') || area.value.includes('先手'))) {
+                            return area.value;
+                          }
+                        }
+                        
+                        // 3. Check if it's in a div or pre that might be visible now
+                        const getAllContainers = (root) => {
+                          let results = Array.from(root.querySelectorAll('div, pre, code'));
+                          const all = root.querySelectorAll('*');
+                          for (const el of all) {
+                            try {
+                              if (el.shadowRoot) {
+                                results = results.concat(getAllContainers(el.shadowRoot));
+                              }
+                            } catch (e) {}
+                          }
+                          return results;
+                        };
+
+                        const potentialContainers = getAllContainers(doc);
+                        for (const el of potentialContainers) {
+                            const text = el.textContent;
+                            if (text && text.length > 100 && (text.includes('Start-Date') || (text.includes('先手') && text.includes('指手')))) {
+                              return text;
+                            }
+                        }
+
+                        // 4. Check global variables
+                        if (win._kifu_data) return win._kifu_data;
+                        if (win.kifu_data) return win.kifu_data;
+                        if (win.KIF_DATA) return win.KIF_DATA;
+                        
+                        return null;
+                      };
+
+                      return await extractFromDocument(window, document);
+                    }"""
+
+                    if (foundKif == null || foundKif.isEmpty) {
+                      foundKif = detailPage.evaluate(extractionScript).asInstanceOf[String]
+                    }
+                    
+                    if (foundKif == null || foundKif.isEmpty) {
+                      // Fallback: Try evaluating in each frame separately (handles cross-origin better)
+                      val allFrames = detailPage.frames().asScala
+                      for (frame <- allFrames if foundKif == null || foundKif.isEmpty) {
+                          try {
+                            foundKif = frame.evaluate(extractionScript).asInstanceOf[String]
+                            if (foundKif != null && !foundKif.isEmpty) {
+                              logger.info(s"[81DOJO] KIF found in frame '${frame.name()}' for $absoluteGameUrl")
+                            }
+                          } catch {
+                            case _: Exception => // ignore
+                          }
+                      }
+                    }
+                    
+                    if (foundKif == null || foundKif.isEmpty) {
+                      logger.warn(s"[81DOJO] KIF button clicked but no KIF content found for $absoluteGameUrl")
+                      // Take screenshot for debugging
+                      val timestamp = System.currentTimeMillis()
+                      val screenshotPath = java.nio.file.Paths.get(s"81dojo_kif_error_$timestamp.png")
+                      try {
+                        detailPage.screenshot(new Page.ScreenshotOptions().setPath(screenshotPath))
+                      } catch { case e: Exception => logger.debug(s"[81DOJO] Could not save screenshot: ${e.getMessage}") }
+                    }
+
+                    Option(foundKif).filter(_.nonEmpty)
+                  } catch {
+                    case e: Exception =>
+                      logger.warn(s"[81DOJO] Could not extract KIF for $absoluteGameUrl: ${e.getMessage}")
+                      None
+                  }
+
+                  // Be nice to the server and allow some time between detail page requests
+                  detailPage.waitForTimeout(1000)
+                  
+                  Some(SearchGame(sente, gote, date, kif, site = Some("81dojo")))
+                }
               }
-
-              // Be nice to the server and allow some time between detail page requests
-              detailPage.waitForTimeout(1000)
-              
-              Some(SearchGame(sente, gote, date, kif, site = Some("81dojo")))
             }
           } catch {
             case e: Exception =>

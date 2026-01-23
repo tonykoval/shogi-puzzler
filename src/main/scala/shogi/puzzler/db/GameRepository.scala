@@ -12,6 +12,8 @@ trait GameRepositoryTrait {
   def savePuzzle(json: String, gameKifHash: String): Future[InsertOneResult]
   def getAllPuzzles(): Future[Seq[Document]]
   def getPuzzlesForGame(gameKifHash: String): Future[Seq[Document]]
+  def getPublicPuzzles(): Future[Seq[Document]]
+  def togglePuzzlePublic(puzzleId: String, isPublic: Boolean): Future[UpdateResult]
   def getAllGames(): Future[Seq[Document]]
   def exists(kif: String): Future[Boolean]
   def findByMetadata(sente: String, gote: String, date: String): Future[Option[Document]]
@@ -67,6 +69,17 @@ object GameRepository extends GameRepositoryTrait {
     puzzlesCollection.find(org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash)).toFuture()
   }
 
+  def getPublicPuzzles(): Future[Seq[Document]] = {
+    puzzlesCollection.find(org.mongodb.scala.model.Filters.equal("is_public", true)).toFuture()
+  }
+
+  def togglePuzzlePublic(puzzleId: String, isPublic: Boolean): Future[org.mongodb.scala.result.UpdateResult] = {
+    puzzlesCollection.updateOne(
+      org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(puzzleId)),
+      org.mongodb.scala.model.Updates.set("is_public", isPublic)
+    ).toFuture()
+  }
+
   def getAllGames(): Future[Seq[Document]] = {
     collection.find().toFuture()
   }
@@ -76,11 +89,37 @@ object GameRepository extends GameRepositoryTrait {
   }
 
   def findByMetadata(sente: String, gote: String, date: String): Future[Option[Document]] = {
-    // Simple matching, might need normalization
+    import java.time.LocalDate
+    import java.time.format.DateTimeFormatter
+    import scala.util.Try
+
+    val normalizedDate = date.replace("-", "/")
+    
+    val dateVariants = if (normalizedDate.length >= 10) {
+      val baseDateStr = normalizedDate.substring(0, 10)
+      val format = DateTimeFormatter.ofPattern("yyyy/MM/dd")
+      Try(LocalDate.parse(baseDateStr, format)).map { d =>
+        Seq(
+          d.format(format),
+          d.plusDays(1).format(format),
+          d.minusDays(1).format(format)
+        )
+      }.getOrElse(Seq(normalizedDate))
+    } else {
+      Seq(normalizedDate)
+    }
+
+    val dateFilters = dateVariants.flatMap { d =>
+      Seq(
+        org.mongodb.scala.model.Filters.regex("date", s"^${java.util.regex.Pattern.quote(d)}.*"),
+        org.mongodb.scala.model.Filters.regex("date", s"^${java.util.regex.Pattern.quote(d.replace("/", "-"))}.*")
+      )
+    }
+
     collection.find(org.mongodb.scala.model.Filters.and(
       org.mongodb.scala.model.Filters.equal("sente", sente),
       org.mongodb.scala.model.Filters.equal("gote", gote),
-      org.mongodb.scala.model.Filters.equal("date", date)
+      org.mongodb.scala.model.Filters.or(dateFilters: _*)
     )).toFuture().map(_.headOption)(scala.concurrent.ExecutionContext.global)
   }
 

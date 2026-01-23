@@ -81,13 +81,13 @@ object MaintenanceRoutes extends BaseRoutes {
         script(src := "/js/maintenance.js")
       )
     )(
-      div(cls := "d-flex justify-content-between align-items-center mb-4")(
-        h1("Shogi Game Fetcher"),
+      div(cls := "d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4")(
+        h1(cls := "mb-0")("Shogi Game Fetcher"),
         div(cls := "d-flex gap-2")(
           button(cls := "btn btn-outline-warning reload-data", title := "Refresh data") (
-            i(cls := "bi bi-arrow-clockwise me-1"), "Refresh Data"
+            i(cls := "bi bi-arrow-clockwise me-1"), "Refresh"
           ),
-          a(href := "/viewer", cls := "btn btn-info")("Open Puzzle Viewer")
+          a(href := "/viewer", cls := "btn btn-info")("Puzzles")
         )
       ),
       Components.gameFetcherCard("Lishogi Games", "lishogi", settings.lishogiNickname, "Click 'Fetch' to load Lishogi games."),
@@ -260,12 +260,14 @@ object MaintenanceRoutes extends BaseRoutes {
     } else {
       val taskId = TaskManager.createTask()
       
+      val effectiveLimit = if (force) limit else 100
+      
       Future {
         try {
           logger.info(s"[MAINTENANCE] Processing fetch for '$targetPlayer' from '$sourceId'")
           val games = if (!force) {
-            logger.info(s"[MAINTENANCE] Fetching games from DB for $targetPlayer, source $sourceId with limit $limit")
-            val dbGames = Await.result(GameRepository.findByPlayerAndSource(targetPlayer, sourceId, limit), 10.seconds)
+            logger.info(s"[MAINTENANCE] Fetching games from DB for $targetPlayer, source $sourceId with limit $effectiveLimit")
+            val dbGames = Await.result(GameRepository.findByPlayerAndSource(targetPlayer, sourceId, effectiveLimit), 10.seconds)
             logger.info(s"[MAINTENANCE] DB returned ${dbGames.size} games")
             dbGames.map { doc =>
               SearchGame(
@@ -278,11 +280,11 @@ object MaintenanceRoutes extends BaseRoutes {
                 puzzleCount = 0,
                 site = doc.get("site").map(_.asString().getValue)
               )
-            }
+            }.take(limit)
           } else {
             logger.info(s"[MAINTENANCE] Fetching games from external source $sourceId for $targetPlayer with limit $limit")
             val fetcher = sources.getOrElse(sourceId, ShogiWarsSource)
-            val fetched = fetcher.fetchGames(targetPlayer, limit, userEmail, msg => TaskManager.updateProgress(taskId, msg))
+            val fetched = fetcher.fetchGames(targetPlayer, limit, userEmail, msg => TaskManager.updateProgress(taskId, msg), skipExisting = true)
             gamesCache(cacheKey) = fetched
             fetched
           }
@@ -291,38 +293,65 @@ object MaintenanceRoutes extends BaseRoutes {
             val kifHash = g.kif.map(GameRepository.md5Hash)
             
             val (exists, analyzed, pCount) = if (g.existsInDb) {
-              val hash = kifHash.get
-              val count = Await.result(GameRepository.countPuzzlesForGame(hash), 5.seconds).toInt
+              val hash = kifHash.getOrElse("")
+              val count = if (hash.nonEmpty) Await.result(GameRepository.countPuzzlesForGame(hash), 5.seconds).toInt else 0
               (true, g.isAnalyzed, count)
             } else {
               val dbGame = kifHash.flatMap(hash => Await.result(GameRepository.getGameByHash(hash), 5.seconds))
               
               val ex = dbGame.isDefined
               val an = dbGame.exists(_.get("is_analyzed").exists(_.asBoolean().getValue))
-              val pc = if (ex && an) Await.result(GameRepository.countPuzzlesForGame(kifHash.get), 5.seconds).toInt else 0
+              val pc = if (ex && an && kifHash.isDefined) Await.result(GameRepository.countPuzzlesForGame(kifHash.get), 5.seconds).toInt else 0
               (ex, an, pc)
             }
             
             g.copy(existsInDb = exists, isAnalyzed = analyzed, puzzleCount = pCount)
-          }
+          }.filter(g => !force || !g.existsInDb)
 
           val resultHtml = div(
-            div(cls := "d-flex justify-content-between align-items-center")(
-              h3(s"Results for $targetPlayer"),
-              tag("span")(cls := s"badge ${if (force) "bg-info" else "bg-secondary"}")(
-                if (force) "Fetched from Website" else "Fetched from DB"
-              )
+            div(cls := "d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3")(
+              div(
+                h3(cls := "mb-0")(s"Results for $targetPlayer"),
+                tag("span")(cls := s"badge ${if (force) "bg-info" else "bg-secondary"}")(
+                  if (force) "Fetched from Website" else "Fetched from DB"
+                )
+              ),
+              if (gamesWithDbStatus.nonEmpty) {
+                div(cls := "btn-group btn-group-sm", role := "group")(
+                  input(`type` := "radio", cls := "btn-check", name := s"filter-$sourceId", id := s"all-$sourceId", checked := "checked", onclick := s"window.maintenance.filterGames('all', '$sourceId-results')"),
+                  label(cls := "btn btn-outline-secondary", `for` := s"all-$sourceId")("All"),
+                  
+                  input(`type` := "radio", cls := "btn-check", name := s"filter-$sourceId", id := s"analyzed-$sourceId", onclick := s"window.maintenance.filterGames('analyzed', '$sourceId-results')"),
+                  label(cls := "btn btn-outline-info", `for` := s"analyzed-$sourceId")("Analyzed"),
+                  
+                  input(`type` := "radio", cls := "btn-check", name := s"filter-$sourceId", id := s"indb-$sourceId", onclick := s"window.maintenance.filterGames('indb', '$sourceId-results')"),
+                  label(cls := "btn btn-outline-success", `for` := s"indb-$sourceId")("In DB"),
+                  
+                  input(`type` := "radio", cls := "btn-check", name := s"filter-$sourceId", id := s"new-$sourceId", onclick := s"window.maintenance.filterGames('new', '$sourceId-results')"),
+                  label(cls := "btn btn-outline-warning", `for` := s"new-$sourceId")("New")
+                )
+              } else ""
             ),
             if (gamesWithDbStatus.isEmpty) p("No games found.")
             else
               div(cls := "table-responsive")(
-                table(cls := "table table-dark table-hover")(
+                table(cls := "table table-dark table-hover align-middle")(
                   thead(
-                    tr(th(""), th("Sente"), th("Gote"), th("Date"), th("Status"), th("Puzzles"), th("Analysis"), th("Actions"))
+                    tr(
+                      th(""), 
+                      th("Players"), 
+                      th(cls := "d-none d-md-table-cell")("Date"), 
+                      th("Status"), 
+                      th(cls := "d-none d-md-table-cell")("Puzzles"), 
+                      th("Analysis"), 
+                      th(cls := "d-none d-md-table-cell")("Actions")
+                    )
                   ),
                   tbody(
                     gamesWithDbStatus.map { g =>
                       val kifHash = g.kif.map(GameRepository.md5Hash).getOrElse("")
+                      val status = if (g.isAnalyzed) "analyzed" else if (g.existsInDb) "indb" else "new"
+                      
                       val kif = g.kif.getOrElse("")
                       val kifHashStr = if (kif.nonEmpty) {
                         var h = 0
@@ -333,7 +362,7 @@ object MaintenanceRoutes extends BaseRoutes {
                         }
                         java.lang.Math.abs(h).toHexString
                       } else ""
-                      tr(
+                      tr(attr("data-status") := status)(
                         td(
                           if (!g.existsInDb && g.kif.isDefined)
                             input(`type` := "checkbox", cls := "game-check", 
@@ -346,26 +375,36 @@ object MaintenanceRoutes extends BaseRoutes {
                             )
                           else ""
                         ),
-                        td(g.sente),
-                        td(g.gote),
-                        td(g.date),
+                        td(
+                          div(cls := "d-flex flex-column")(
+                            tag("span")(cls := "text-info")(s"☗ ${g.sente}"),
+                            tag("span")(cls := "text-warning")(s"☖ ${g.gote}"),
+                            tag("span")(cls := "d-md-none small text-muted mt-1")(g.date)
+                          )
+                        ),
+                        td(cls := "d-none d-md-table-cell")(g.date),
                         td(
                           if (g.existsInDb) tag("span")(cls := "badge bg-success")("In DB")
                           else tag("span")(cls := "badge bg-warning text-dark")("New")
                         ),
-                        td(if (g.isAnalyzed) tag("span")(g.puzzleCount.toString) else "-"),
+                        td(cls := "d-none d-md-table-cell")(if (g.isAnalyzed) tag("span")(g.puzzleCount.toString) else "-"),
                         td(
                           if (g.existsInDb) {
                             if (g.isAnalyzed) {
-                              div(
-                                tag("span")(cls := "badge bg-info")("Analyzed"),
-                                a(href := s"/viewer?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary ms-2")("Puzzles"),
-                                button(cls := "btn btn-sm btn-outline-primary ms-2 graph-btn",
+                              div(cls := "d-flex flex-wrap gap-2")(
+                                a(href := s"/viewer?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary", title := "Puzzles")(i(cls := "bi bi-puzzle")),
+                                button(cls := "btn btn-sm btn-outline-primary graph-btn",
                                   attr("data-hash") := kifHash,
                                   attr("data-sente") := g.sente,
-                                  attr("data-gote") := g.gote
-                                )("Graph"),
-                                a(href := s"/lishogi-redirect?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-outline-success ms-2")("Lishogi")
+                                  attr("data-gote") := g.gote,
+                                  title := "Graph"
+                                )(i(cls := "bi bi-graph-up")),
+                                a(href := s"/lishogi-redirect?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-outline-success", title := "Lishogi")(i(cls := "bi bi-box-arrow-up-right")),
+                                button(cls := "btn btn-sm btn-outline-danger delete-analysis-btn d-md-none",
+                                  attr("data-hash") := kifHash,
+                                  attr("data-player") := targetPlayer,
+                                  title := "Delete Analysis"
+                                )(i(cls := "bi bi-trash"))
                               )
                             } else button(cls := s"btn btn-sm btn-warning analyze-btn btn-task-$kifHashStr", 
                                         attr("data-kif") := kif,
@@ -373,11 +412,12 @@ object MaintenanceRoutes extends BaseRoutes {
                                         attr("data-site") := g.site.getOrElse(""))("Analyze")
                           } else ""
                         ),
-                        td(
+                        td(cls := "d-none d-md-table-cell")(
                           if (g.isAnalyzed) {
-                            button(cls := "btn btn-sm btn-danger delete-analysis-btn",
+                            button(cls := "btn btn-sm btn-outline-danger delete-analysis-btn",
                               attr("data-hash") := kifHash,
-                              attr("data-player") := targetPlayer)("Delete Analysis")
+                              attr("data-player") := targetPlayer,
+                              title := "Delete Analysis")(i(cls := "bi bi-trash"))
                           } else ""
                         )
                       )

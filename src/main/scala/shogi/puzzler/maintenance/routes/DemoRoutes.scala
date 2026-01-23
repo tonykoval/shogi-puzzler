@@ -12,13 +12,19 @@ object DemoRoutes extends BaseRoutes {
 
   @cask.get("/demo")
   def demo(request: cask.Request) = {
-    val userEmail = Some("demo@example.com")
-    val settings = Await.result(SettingsRepository.getAppSettings(None), 10.seconds)
-    
-    cask.Response(
-      renderDemoPage(userEmail, settings).render,
-      headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-    )
+    val userEmail = getSessionUserEmail(request)
+    if (oauthEnabled && userEmail.isEmpty) {
+      logger.info(s"[DEMO] Redirecting to /login because userEmail is empty")
+      noCacheRedirect("/login")
+    } else {
+      val effectiveEmail = userEmail.orElse(Some("demo@example.com"))
+      val settings = Await.result(SettingsRepository.getAppSettings(effectiveEmail), 10.seconds)
+      
+      cask.Response(
+        renderDemoPage(effectiveEmail, settings).render,
+        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+      )
+    }
   }
 
   def renderDemoPage(userEmail: Option[String], settings: AppSettings) = {
@@ -32,95 +38,94 @@ object DemoRoutes extends BaseRoutes {
         script(src := "/js/maintenance.js")
       )
     )(
-      div(cls := "container")(
-        div(cls := "row")(
-          div(cls := "col-12")(
-            div(cls := "alert alert-info")(
-              h4(cls := "alert-heading")("Welcome to the Maintenance Demo!"),
-              p("This page demonstrates how games are fetched, analyzed, and turned into puzzles."),
-              hr(),
-              p(cls := "mb-0")("Follow the steps below to see the process in action.")
+      h1(cls := "mb-4")("Maintenance Demo"),
+      div(cls := "row")(
+        div(cls := "col-12")(
+          div(cls := "alert alert-info")(
+            h4(cls := "alert-heading")("Welcome to the Maintenance Demo!"),
+            p("This page demonstrates how games are fetched, analyzed, and turned into puzzles."),
+            hr(),
+            p(cls := "mb-0")("Follow the steps below to see the process in action.")
+          )
+        )
+      ),
+      div(cls := "row mb-4")(
+        div(cls := "col-md-12")(
+          div(cls := "card bg-dark text-light border-secondary")(
+            div(cls := "card-header border-secondary")(
+              h3("Step 1: Fetch a Game")
+            ),
+            div(cls := "card-body")(
+              p("Normally you would fetch many games from a source like Lishogi or ShogiWars. For this demo, we'll fetch one specific interesting game."),
+              button(cls := "btn btn-primary", onclick := "fetchDemoGame()")(id := "fetchDemoBtn")("Fetch Demo Game")
             )
           )
-        ),
-        div(cls := "row mb-4")(
-          div(cls := "col-md-12")(
-            div(cls := "card bg-dark text-light border-secondary")(
-              div(cls := "card-header border-secondary")(
-                h3("Step 1: Fetch a Game")
-              ),
-              div(cls := "card-body")(
-                p("Normally you would fetch many games from a source like Lishogi or ShogiWars. For this demo, we'll fetch one specific interesting game."),
-                button(cls := "btn btn-primary", onclick := "fetchDemoGame()")(id := "fetchDemoBtn")("Fetch Demo Game")
-              )
+        )
+      ),
+      div(id := "demo-results-container", cls := "row mb-4", style := "display: none;")(
+        div(cls := "col-md-12")(
+          div(cls := "card bg-dark text-light border-secondary")(
+            div(cls := "card-header border-secondary")(
+              h3("Step 2: Analyze & Extract Puzzles")
+            ),
+            div(cls := "card-body")(
+              div(id := "demo-game-item")
             )
           )
-        ),
-        div(id := "demo-results-container", cls := "row mb-4", style := "display: none;")(
-          div(cls := "col-md-12")(
-            div(cls := "card bg-dark text-light border-secondary")(
-              div(cls := "card-header border-secondary")(
-                h3("Step 2: Analyze & Extract Puzzles")
-              ),
-              div(cls := "card-body")(
-                div(id := "demo-game-item")
-              )
-            )
-          )
-        ),
-        div(cls := "row")(
-          div(cls := "col-12 text-center")(
-            a(href := "/viewer", cls := "btn btn-lg btn-outline-info")("Go to Puzzle Viewer")
-          )
-        ),
-        script(raw("""
-          function fetchDemoGame() {
-            $('#fetchDemoBtn').prop('disabled', true).text('Fetching...');
-            $.get('/demo-fetch', function(data) {
-              $('#demo-results-container').show();
-              $('#demo-game-item').html(data);
-              $('#fetchDemoBtn').text('Game Fetched').addClass('btn-success').removeClass('btn-primary');
-            });
-          }
+        )
+      ),
+      div(cls := "row")(
+        div(cls := "col-12 text-center")(
+          a(href := "/viewer", cls := "btn btn-lg btn-outline-info")("Go to Puzzle Viewer")
+        )
+      ),
+      script(raw("""
+        function fetchDemoGame() {
+          $('#fetchDemoBtn').prop('disabled', true).text('Fetching...');
+          $.get('/demo-fetch', function(data) {
+            $('#demo-results-container').show();
+            $('#demo-game-item').html(data);
+            $('#fetchDemoBtn').text('Game Fetched').addClass('btn-success').removeClass('btn-primary');
+          });
+        }
 
-          function analyzeDemoGame(btn, source, player, kif) {
-            console.log('Starting demo analysis for', player);
-            $(btn).prop('disabled', true).text('Analyzing...');
-            
-            // Unicode-safe btoa replacement
-            function utob(str) {
-              return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(match, p1) {
-                return String.fromCharCode('0x' + p1);
-              }));
-            }
-            
-            const kifHash = utob(kif).substring(0, 16); // Mock hash for demo
-            
-            $.ajax({
-              url: '/maintenance-analyze',
-              type: 'POST',
-              contentType: 'application/json',
-              data: JSON.stringify({
-                source: source,
-                player: player,
-                kif: kif
-              }),
-              success: function(data) {
-                console.log('Analysis successful:', data);
-                $(btn).text('Analyzed').addClass('btn-success').removeClass('btn-primary');
-                // After analysis, we show the link to puzzles
-                const puzzlesLink = '<div class="mt-3"><a href="/viewer" class="btn btn-info">Watch Puzzles</a></div>';
-                $(btn).after(puzzlesLink);
-              },
-              error: function(xhr) {
-                console.error('Analysis failed:', xhr.responseText);
-                $(btn).prop('disabled', false).text('Analyze Again');
-                alert('Analysis failed: ' + xhr.responseText + '. Make sure the engine is configured in Config.');
-              }
-            });
+        function analyzeDemoGame(btn, source, player, kif) {
+          console.log('Starting demo analysis for', player);
+          $(btn).prop('disabled', true).text('Analyzing...');
+          
+          // Unicode-safe btoa replacement
+          function utob(str) {
+            return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(match, p1) {
+              return String.fromCharCode('0x' + p1);
+            }));
           }
-        """))
-      )
+          
+          const kifHash = utob(kif).substring(0, 16); // Mock hash for demo
+          
+          $.ajax({
+            url: '/maintenance-analyze',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({
+              source: source,
+              player: player,
+              kif: kif
+            }),
+            success: function(data) {
+              console.log('Analysis successful:', data);
+              $(btn).text('Analyzed').addClass('btn-success').removeClass('btn-primary');
+              // After analysis, we show the link to puzzles
+              const puzzlesLink = '<div class="mt-3"><a href="/viewer" class="btn btn-info">Watch Puzzles</a></div>';
+              $(btn).after(puzzlesLink);
+            },
+            error: function(xhr) {
+              console.error('Analysis failed:', xhr.responseText);
+              $(btn).prop('disabled', false).text('Analyze Again');
+              alert('Analysis failed: ' + xhr.responseText + '. Make sure the engine is configured in Config.');
+            }
+          });
+        }
+      """))
     )
   }
 

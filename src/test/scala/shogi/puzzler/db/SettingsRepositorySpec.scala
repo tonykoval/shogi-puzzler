@@ -13,7 +13,6 @@ class SettingsRepositorySpec extends AnyWordSpec with Matchers {
         lishogiNickname = "lishogi",
         shogiwarsNickname = "swars",
         dojo81Nickname = "dojo81",
-        dojo81Password = "pass",
         enginePath = "engine",
         shallowLimit = 5,
         deepLimit = 15,
@@ -27,7 +26,6 @@ class SettingsRepositorySpec extends AnyWordSpec with Matchers {
         loaded.lishogiNickname shouldBe settings.lishogiNickname
         loaded.shogiwarsNickname shouldBe settings.shogiwarsNickname
         loaded.dojo81Nickname shouldBe settings.dojo81Nickname
-        loaded.dojo81Password shouldBe settings.dojo81Password
         loaded.enginePath shouldBe settings.enginePath
         loaded.shallowLimit shouldBe settings.shallowLimit
         loaded.deepLimit shouldBe settings.deepLimit

@@ -23,7 +23,7 @@ object LishogiSource extends GameSource {
 
       val response = requests.get(
         url,
-        params = Map("max" -> (if (skipExisting) (limit * 5).toString else limit.toString), "clocks" -> "false", "evals" -> "false", "opening" -> "false"),
+        params = Map("max" -> (if (skipExisting) "100" else limit.toString), "clocks" -> "false", "evals" -> "false", "opening" -> "false"),
         headers = Map("Accept" -> "application/x-ndjson")
       )
 
@@ -44,36 +44,44 @@ object LishogiSource extends GameSource {
       import scala.concurrent.Await
       import scala.concurrent.duration._
 
+      var foundNewGames = 0
       val results = lines.flatMap { line =>
         try {
-          val data = ujson.read(line)
-          val players = data("players")
-          
-          def getPlayerName(color: String): String = {
-            players.obj.get(color).flatMap { p =>
-              p.obj.get("user").flatMap(_.obj.get("name")).map(_.str)
-            }.getOrElse("AI")
-          }
+          if (foundNewGames >= limit) {
+            None
+          } else {
+            val data = ujson.read(line)
+            val players = data("players")
+            
+            def getPlayerName(color: String): String = {
+              players.obj.get(color).flatMap { p =>
+                p.obj.get("user").flatMap(_.obj.get("name")).map(_.str)
+              }.getOrElse("AI")
+            }
 
-          val sente = getPlayerName("sente")
-          val gote = getPlayerName("gote")
-          
-          val date = java.time.Instant.ofEpochMilli(data("createdAt").num.toLong)
-            .atZone(java.time.ZoneId.systemDefault())
-            .toLocalDate.toString
-          
-          val id = data("id").str
+            val sente = getPlayerName("sente")
+            val gote = getPlayerName("gote")
+            
+            val date = java.time.Instant.ofEpochMilli(data("createdAt").num.toLong)
+              .atZone(java.time.ZoneId.systemDefault())
+              .toLocalDate.toString
+            
+            val id = data("id").str
 
-          if (skipExisting) {
-            val exists = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds).isDefined
-            if (exists) {
-              logger.info(s"[LISHOGI] Skipping existing game $id ($sente vs $gote $date)")
-              None
+            val (existingGame, isAnalyzed) = if (skipExisting) {
+              val dbG = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds)
+              (dbG, dbG.exists(_.get("is_analyzed").exists(_.asBoolean().getValue)))
             } else {
+              (None, false)
+            }
+
+            if (skipExisting && existingGame.isDefined) {
+              logger.info(s"[LISHOGI] Skipping existing game $id ($sente vs $gote $date)")
+              Some(SearchGame(sente, gote, date, None, existsInDb = true, isAnalyzed = isAnalyzed, site = Some("lishogi")))
+            } else {
+              foundNewGames += 1
               fetchKif(id, sente, gote, date)
             }
-          } else {
-            fetchKif(id, sente, gote, date)
           }
         } catch {
           case e: Exception =>
@@ -82,7 +90,7 @@ object LishogiSource extends GameSource {
         }
       }.toSeq
 
-      results.take(limit)
+      results
 
     } catch {
       case e: Exception =>

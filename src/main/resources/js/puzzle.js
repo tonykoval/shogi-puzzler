@@ -2,8 +2,14 @@ let data, ids, sg, selected, selectedData
 const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
-const apiUrl = hash ? "data?hash=" + hash : "data";
-const cacheKey = hash ? "puzzles_" + hash : "puzzles_all";
+const isPublicPage = window.location.pathname === "/puzzles";
+
+let apiUrl = hash ? "data?hash=" + hash : "data";
+if (isPublicPage) {
+    apiUrl = "/public-data";
+}
+
+const cacheKey = isPublicPage ? "puzzles_public" : (hash ? "puzzles_" + hash : "puzzles_all");
 
 function loadData(forceReload = false) {
     if (!forceReload) {
@@ -123,6 +129,44 @@ $(".lishogi-game").click( function () {
     }
 });
 
+$("#isPublicCheckbox").change(function() {
+    if (selected && selected._id && selected._id.$oid) {
+        const isPublic = $(this).is(":checked");
+        const puzzleId = selected._id.$oid;
+        
+        $.ajax({
+            url: "/viewer/toggle-public",
+            type: "POST",
+            contentType: "application/json",
+            data: JSON.stringify({ id: puzzleId, isPublic: isPublic }),
+            success: function(response) {
+                // Update local data
+                selected.is_public = isPublic;
+                localStorage.setItem(cacheKey, JSON.stringify(data));
+                
+                const Toast = Swal.mixin({
+                    toast: true,
+                    position: 'top-end',
+                    showConfirmButton: false,
+                    timer: 2000,
+                    timerProgressBar: true
+                });
+                Toast.fire({
+                    icon: 'success',
+                    title: isPublic ? 'Puzzle is now public' : 'Puzzle is now private'
+                });
+            },
+            error: function() {
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Error',
+                    text: 'Failed to update puzzle visibility.'
+                });
+            }
+        });
+    }
+});
+
 $(".lishogi-position").click( function () {
     window.open("https://lishogi.org/analysis/standard/" + selected.sfen, "_blank");
 });
@@ -199,6 +243,11 @@ function selectSituation(id, data) {
         // Update nav buttons state
         $(".prev-puzzle").prop('disabled', id === 0);
         $(".next-puzzle").prop('disabled', id === data.length - 1);
+
+        // Update public checkbox
+        if ($("#isPublicCheckbox").length) {
+            $("#isPublicCheckbox").prop('checked', !!selected.is_public);
+        }
     }
 
     sg = Shogiground();

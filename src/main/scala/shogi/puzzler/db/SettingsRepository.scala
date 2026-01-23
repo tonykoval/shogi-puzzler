@@ -72,7 +72,6 @@ object SettingsRepository {
       val lishogiNickF = getSetting("lishogi_nickname", config.getString("app.fetcher.lishogi.nickname"))
       val swarsNickF = getSetting("shogiwars_nickname", config.getString("app.fetcher.shogiwars.nickname"))
       val dojoNickF = getSetting("dojo81_nickname", config.getString("app.fetcher.dojo81.nickname"))
-      val dojoPassF = getSetting("dojo81_password", config.getString("app.fetcher.dojo81.password"))
       val engineF = getSetting("engine_path", config.getString("app.engine.path"))
       val shallowF = getIntSetting("shallow_limit", config.getInt("app.analysis.shallow-limit"))
       val deepF = getIntSetting("deep_limit", config.getInt("app.analysis.deep-limit"))
@@ -82,12 +81,11 @@ object SettingsRepository {
         lishogiNick <- lishogiNickF
         swarsNick <- swarsNickF
         dojoNick <- dojoNickF
-        dojoPass <- dojoPassF
         engine <- engineF
         shallow <- shallowF
         deep <- deepF
         threshold <- thresholdF
-      } yield AppSettings(lishogiNick, swarsNick, dojoNick, dojoPass, engine, shallow, deep, threshold, isConfigured = false)
+      } yield AppSettings(lishogiNick, swarsNick, dojoNick, engine, shallow, deep, threshold, isConfigured = false)
     }
 
     def fetchFromDoc(doc: Document): AppSettings = {
@@ -103,7 +101,6 @@ object SettingsRepository {
         lishogiNickname = Option(doc.getString("lishogi_nickname")).getOrElse(config.getString("app.fetcher.lishogi.nickname")),
         shogiwarsNickname = Option(doc.getString("shogiwars_nickname")).getOrElse(config.getString("app.fetcher.shogiwars.nickname")),
         dojo81Nickname = Option(doc.getString("dojo81_nickname")).getOrElse(config.getString("app.fetcher.dojo81.nickname")),
-        dojo81Password = Option(doc.getString("dojo81_password")).getOrElse(config.getString("app.fetcher.dojo81.password")),
         enginePath = Option(doc.getString("engine_path")).getOrElse(config.getString("app.engine.path")),
         shallowLimit = Option(doc.getInteger("shallow_limit")).map(_.toInt).getOrElse(config.getInt("app.analysis.shallow-limit")),
         deepLimit = Option(doc.getInteger("deep_limit")).map(_.toInt).getOrElse(config.getInt("app.analysis.deep-limit")),
@@ -142,7 +139,6 @@ object SettingsRepository {
       "lishogi_nickname" -> settings.lishogiNickname,
       "shogiwars_nickname" -> settings.shogiwarsNickname,
       "dojo81_nickname" -> settings.dojo81Nickname,
-      "dojo81_password" -> settings.dojo81Password,
       "engine_path" -> settings.enginePath,
       "shallow_limit" -> settings.shallowLimit,
       "deep_limit" -> settings.deepLimit,
@@ -156,10 +152,25 @@ case class AppSettings(
   lishogiNickname: String,
   shogiwarsNickname: String,
   dojo81Nickname: String,
-  dojo81Password: String,
   enginePath: String,
   shallowLimit: Int,
   deepLimit: Int,
   winChanceDropThreshold: Double,
   isConfigured: Boolean = false
 )
+
+object AppSettings {
+  def default: AppSettings = {
+    val config = com.typesafe.config.ConfigFactory.load()
+    AppSettings(
+      lishogiNickname = config.getString("app.fetcher.lishogi.nickname"),
+      shogiwarsNickname = config.getString("app.fetcher.shogiwars.nickname"),
+      dojo81Nickname = config.getString("app.fetcher.dojo81.nickname"),
+      enginePath = config.getString("app.engine.path"),
+      shallowLimit = config.getInt("app.analysis.shallow-limit"),
+      deepLimit = config.getInt("app.analysis.deep-limit"),
+      winChanceDropThreshold = config.getDouble("app.analysis.win-chance-drop-threshold"),
+      isConfigured = false
+    )
+  }
+}

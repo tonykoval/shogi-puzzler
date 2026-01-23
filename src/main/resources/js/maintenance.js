@@ -322,6 +322,30 @@ window.maintenance = {
         else if (isShogiwars) self.isFetchingShogiwars = false;
         else if (isDojo81) self.isFetchingDojo81 = false;
       });
+  },
+  
+  filterGames: function(filterType, containerId) {
+    console.log('Filtering games:', filterType, 'in', containerId);
+    const $container = $('#' + containerId);
+    const $rows = $container.find('tbody tr');
+    
+    $rows.each(function() {
+      const $row = $(this);
+      const status = $row.data('status');
+      
+      if (filterType === 'all') {
+        $row.show();
+      } else if (filterType === 'analyzed') {
+        if (status === 'analyzed') $row.show();
+        else $row.hide();
+      } else if (filterType === 'indb') {
+        if (status === 'indb' || status === 'analyzed') $row.show();
+        else $row.hide();
+      } else if (filterType === 'new') {
+        if (status === 'new') $row.show();
+        else $row.hide();
+      }
+    });
   }
 };
 

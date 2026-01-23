@@ -12,15 +12,18 @@ object Components {
         meta(name := "theme-color", attr("content") := "#2e2a24"),
         tag("title")(title),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
         link(rel := "stylesheet", href := "/assets/css/common.css"),
         link(rel := "stylesheet", href := "/assets/css/site.css"),
         script(src := "https://code.jquery.com/jquery-3.6.0.min.js"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"),
         scripts
       ),
-      body(cls := "container mt-0")(
+      body(cls := "container-fluid mt-0", style := "max-width: 1400px;")(
         renderHeader(userEmail, settings, version),
-        content
+        div(cls := "container-fluid")(
+          content
+        )
       )
     )
   }
@@ -30,12 +33,12 @@ object Components {
       div(cls := "col-md-12")(
         div(cls := "card bg-dark text-light border-secondary")(
           div(cls := "card-body")(
-            div(cls := "d-flex justify-content-between align-items-center mb-3")(
+            div(cls := "d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3")(
               h2(cls := "mb-0")(title),
-              div(cls := "d-flex gap-2")(
-                div(cls := "input-group input-group-sm", style := "width: 150px")(
+              div(cls := "d-flex flex-wrap gap-2")(
+                div(cls := "input-group input-group-sm", style := "width: 130px")(
                   tag("span")(cls := "input-group-text bg-dark text-light border-secondary")("Hits"),
-                  input(`type` := "number", id := s"${idPrefix}MaxGames", cls := "form-control bg-dark text-light border-secondary", value := "10")
+                  input(`type` := "number", id := s"${idPrefix}MaxGames", cls := "form-control bg-dark text-light border-secondary", value := "10", onchange := " $('.reload-data').first().click(); ")
                 ),
                 button(cls := "btn btn-sm btn-outline-primary", onclick := s"window.maintenance.doFetch('$idPrefix', '$nickname', true)")(s"Fetch $title")
               )
@@ -61,7 +64,7 @@ object Components {
     
     tag("nav")(cls := "navbar navbar-expand-lg navbar-dark bg-dark mb-4")(
       div(cls := "container-fluid")(
-        a(cls := "navbar-brand", href := "/my-games")("Shogi Puzzler"),
+        a(cls := "navbar-brand", href := "/")("Shogi Puzzler"),
         if (version.nonEmpty) span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
         button(cls := "navbar-toggler", `type` := "button", 
           attr("data-bs-toggle") := "collapse", 
@@ -74,25 +77,31 @@ object Components {
               a(cls := "nav-link", href := "/my-games")("My Games")
             ),
             li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/viewer")("Puzzle viewer")
+              a(cls := "nav-link", href := "/viewer")("My Puzzle Viewer")
+            ),
+            li(cls := "nav-item")(
+              a(cls := "nav-link", href := "/puzzles")("Public Puzzles")
             ),
             li(cls := "nav-item")(
               a(cls := "nav-link", href := "/config")("Config")
             )
           ),
-          div(cls := "navbar-text d-flex align-items-center")(
-            div(cls := "me-3 text-light-50", style := "font-size: 0.85rem;")(
-              div(cls := "d-inline-block me-3")(
-                span(cls := "badge bg-secondary me-1")("Lishogi"), span(settings.lishogiNickname),
-                span(cls := "badge bg-secondary ms-2 me-1")("ShogiWars"), span(settings.shogiwarsNickname),
-                span(cls := "badge bg-secondary ms-2 me-1")("81Dojo"), span(settings.dojo81Nickname)
+          div(cls := "navbar-text d-flex align-items-center flex-wrap")(
+            if (userEmail.isDefined) {
+              div(cls := "me-lg-3 text-light-50 my-1", style := "font-size: 0.85rem;")(
+                div(cls := "d-inline-flex flex-wrap gap-2")(
+                  span(span(cls := "badge bg-secondary me-1")("Lishogi"), span(settings.lishogiNickname)),
+                  span(span(cls := "badge bg-secondary me-1")("ShogiWars"), span(settings.shogiwarsNickname)),
+                  span(span(cls := "badge bg-secondary me-1")("81Dojo"), span(settings.dojo81Nickname))
+                )
               )
-            ),
-            span(cls := "ms-2")(
+            } else (),
+            span(cls := "ms-lg-2 my-1")(
               userEmail.map(email => 
-                span(
+                span(cls := "d-inline-flex flex-wrap align-items-center gap-2")(
+                  span(cls := "text-light", style := "font-size: 0.85rem;")("Logged in as:"),
                   span(cls := "badge bg-primary")(i(cls := "bi bi-person-fill me-1"), email),
-                  a(href := "/logout", cls := "btn btn-sm btn-outline-light ms-2")("Logout")
+                  a(href := "/logout", cls := "btn btn-sm btn-outline-light")("Logout")
                 )
               ).getOrElse(
                 a(href := "/login", cls := "btn btn-sm btn-outline-primary")("Login")
