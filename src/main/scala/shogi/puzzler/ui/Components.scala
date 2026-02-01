@@ -2,6 +2,8 @@ package shogi.puzzler.ui
 
 import scalatags.Text.all._
 import shogi.puzzler.db.AppSettings
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 object Components {
   def layout(title: String, userEmail: Option[String], settings: AppSettings, version: String = "", scripts: Seq[Modifier] = Seq.empty)(content: Modifier*) = {
@@ -12,16 +14,20 @@ object Components {
         meta(name := "theme-color", attr("content") := "#2e2a24"),
         tag("title")(title),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
+        link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
         link(rel := "stylesheet", href := "/assets/css/common.css"),
         link(rel := "stylesheet", href := "/assets/css/site.css"),
         script(src := "https://code.jquery.com/jquery-3.6.0.min.js"),
+        script(src := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"),
         scripts
       ),
-      body(cls := "container-fluid mt-0", style := "max-width: 1400px;")(
+      body(cls := "mt-0")(
         renderHeader(userEmail, settings, version),
-        div(cls := "container-fluid")(
+        div(cls := "container-fluid", style := "max-width: 1400px;")(
           content
         )
       )
@@ -60,47 +66,73 @@ object Components {
   }
 
   def renderHeader(userEmail: Option[String], settings: AppSettings, version: String) = {
-    val engineName = settings.enginePath.split("[\\\\/]").last
+    val userDoc = userEmail.flatMap(email => scala.util.Try(Await.result(shogi.puzzler.db.UserRepository.getUser(email), 1.second)).toOption.flatten)
+    val userRole = userDoc.map(_.role)
+    val allowedPages = userDoc.map(_.allowedPages).getOrElse(Set.empty)
+    val isAdmin = userRole.contains("ADMIN")
     
+    def canAccess(page: String): Boolean = isAdmin || allowedPages.contains("*") || allowedPages.contains(page)
+
     tag("nav")(cls := "navbar navbar-expand-lg navbar-dark bg-dark mb-4")(
       div(cls := "container-fluid")(
         a(cls := "navbar-brand", href := "/")("Shogi Puzzler"),
-        if (version.nonEmpty) span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
+        if (version.nonEmpty) scalatags.Text.all.span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
         button(cls := "navbar-toggler", `type` := "button", 
           attr("data-bs-toggle") := "collapse", 
           attr("data-bs-target") := "#navbarNav") (
-          span(cls := "navbar-toggler-icon")
+          scalatags.Text.all.span(cls := "navbar-toggler-icon")
         ),
         div(cls := "collapse navbar-collapse", id := "navbarNav")(
           ul(cls := "navbar-nav me-auto")(
+            if (canAccess("my-games")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/my-games")(i(cls := "bi bi-controller me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("My Games"), scalatags.Text.all.span(cls := "d-lg-none")("Games"))
+              )
+            } else (),
+            if (canAccess("repertoire")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/repertoire")(i(cls := "bi bi-book me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Repertoire"), scalatags.Text.all.span(cls := "d-lg-none")("Rep"))
+              )
+            } else (),
+            if (canAccess("viewer")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-eye me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("My Puzzle Viewer"), scalatags.Text.all.span(cls := "d-lg-none")("Viewer"))
+              )
+            } else (),
             li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/my-games")("My Games")
+              a(cls := "nav-link", href := "/puzzles")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Public Puzzles"), scalatags.Text.all.span(cls := "d-lg-none")("Puzzles"))
             ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/viewer")("My Puzzle Viewer")
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/puzzles")("Public Puzzles")
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/config")("Config")
-            )
+            if (canAccess("config")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/config")(i(cls := "bi bi-gear me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Config"), scalatags.Text.all.span(cls := "d-lg-none")("Cfg"))
+              )
+            } else (),
+            if (canAccess("ocr")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/ocr")(i(cls := "bi bi-camera me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("OCR Library"), scalatags.Text.all.span(cls := "d-lg-none")("OCR"))
+              )
+            } else (),
+            if (canAccess("admin/users")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/admin/users")(i(cls := "bi bi-people me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Users"), scalatags.Text.all.span(cls := "d-lg-none")("Users"))
+              )
+            } else ()
           ),
           div(cls := "navbar-text d-flex align-items-center flex-wrap")(
             if (userEmail.isDefined) {
               div(cls := "me-lg-3 text-light-50 my-1", style := "font-size: 0.85rem;")(
                 div(cls := "d-inline-flex flex-wrap gap-2")(
-                  span(span(cls := "badge bg-secondary me-1")("Lishogi"), span(settings.lishogiNickname)),
-                  span(span(cls := "badge bg-secondary me-1")("ShogiWars"), span(settings.shogiwarsNickname)),
-                  span(span(cls := "badge bg-secondary me-1")("81Dojo"), span(settings.dojo81Nickname))
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("Lishogi"), scalatags.Text.all.span(settings.lishogiNickname)),
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("ShogiWars"), scalatags.Text.all.span(settings.shogiwarsNickname)),
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("81Dojo"), scalatags.Text.all.span(settings.dojo81Nickname))
                 )
               )
             } else (),
-            span(cls := "ms-lg-2 my-1")(
+            scalatags.Text.all.span(cls := "ms-lg-2 my-1")(
               userEmail.map(email => 
-                span(cls := "d-inline-flex flex-wrap align-items-center gap-2")(
-                  span(cls := "text-light", style := "font-size: 0.85rem;")("Logged in as:"),
-                  span(cls := "badge bg-primary")(i(cls := "bi bi-person-fill me-1"), email),
+                scalatags.Text.all.span(cls := "d-inline-flex flex-wrap align-items-center gap-2")(
+                  scalatags.Text.all.span(cls := "text-light", style := "font-size: 0.85rem;")("Logged in as:"),
+                  scalatags.Text.all.span(cls := "badge bg-primary")(i(cls := "bi bi-person-fill me-1"), email),
                   a(href := "/logout", cls := "btn btn-sm btn-outline-light")("Logout")
                 )
               ).getOrElse(

@@ -122,7 +122,7 @@ class GameAnalyzer(engineManager: EngineManager) {
       evaluationScore = parsedScore,
       moveNumber = moveNumber,
       nodesPerSecond = rawEngineData.get("nps").collect { case nodeCount: Int => nodeCount },
-      principalVariation = rawEngineData.get("pv").collect { case pvLines: List[_] => pvLines.head.asInstanceOf[String] }
+      principalVariation = rawEngineData.get("pv").collect { case pvLines: List[_] => pvLines.asInstanceOf[List[String]].mkString(" ") }
     )
   }
 }

@@ -1,4 +1,10 @@
 let data, ids, sg, selected, selectedData
+let isPlayingSequence = false;
+let currentSequenceMoves = [];
+let currentSequenceIndex = -1;
+let autoplayInterval = null;
+let areHintsVisible = false;
+
 const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
@@ -17,8 +23,13 @@ function loadData(forceReload = false) {
         if (cachedData) {
             try {
                 const json = JSON.parse(cachedData);
-                initPuzzles(json);
-                return;
+                if (Array.isArray(json)) {
+                    initPuzzles(json);
+                    return;
+                } else {
+                    console.warn("Cached data is not an array, ignoring.");
+                    localStorage.removeItem(cacheKey);
+                }
             } catch (e) {
                 console.error("Error parsing cached data", e);
                 localStorage.removeItem(cacheKey);
@@ -34,7 +45,9 @@ function loadData(forceReload = false) {
         url: apiUrl,
         dataType: 'json',
         success: function(json) {
-            localStorage.setItem(cacheKey, JSON.stringify(json));
+            if (Array.isArray(json)) {
+                localStorage.setItem(cacheKey, JSON.stringify(json));
+            }
             initPuzzles(json);
             if (forceReload) {
                 Swal.fire({
@@ -61,6 +74,24 @@ function loadData(forceReload = false) {
 }
 
 function initPuzzles(json) {
+    if (typeof json === 'string') {
+        try {
+            json = JSON.parse(json);
+        } catch (e) {
+            console.error("initPuzzles: Failed to parse string as JSON", e);
+        }
+    }
+    if (!Array.isArray(json)) {
+        console.error("initPuzzles expected array but received:", typeof json, json);
+        if (json && json.error) {
+            Swal.fire({
+                icon: 'error',
+                title: 'Access Denied',
+                text: json.error
+            });
+        }
+        return;
+    }
     data = json
     selectedData = data
     ids = createIds(data)
@@ -76,7 +107,9 @@ function initPuzzles(json) {
         templateResult: formatPuzzle
     })
 
-    selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
+    if (selectedData.length > 0) {
+        selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
+    }
 }
 
 loadData();
@@ -101,6 +134,7 @@ games.on('select2:select', function (e) {
 });
 
 $(".random").click( function () {
+    if (!Array.isArray(data) || data.length === 0) return;
     selectedData = data
     selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
 });
@@ -167,20 +201,272 @@ $("#isPublicCheckbox").change(function() {
     }
 });
 
+function clearShapes() {
+    if (sg) {
+        sg.setAutoShapes([]);
+        areHintsVisible = false;
+    }
+}
+
+function stopAutoplay() {
+    if (autoplayInterval) {
+        clearInterval(autoplayInterval);
+        autoplayInterval = null;
+    }
+    $("#continuation-autoplay").html('<i class="bi bi-play-fill"></i>').removeClass('btn-success').addClass('btn-outline-success');
+}
+
+function updateContinuationControls() {
+    $("#continuation-back").prop('disabled', currentSequenceIndex < 0);
+    $("#continuation-next").prop('disabled', currentSequenceIndex >= currentSequenceMoves.length - 1);
+}
+
+function playNextMove() {
+    if (currentSequenceIndex < currentSequenceMoves.length - 1) {
+        currentSequenceIndex++;
+        const moveUsi = currentSequenceMoves[currentSequenceIndex];
+        
+        // Ensure animation is enabled for single step forward
+        sg.set({ animation: { enabled: true } });
+        
+        applyMove(moveUsi, currentSequenceIndex, true);
+        
+        updateContinuationControls();
+        return true;
+    }
+    stopAutoplay();
+    return false;
+}
+
+function playBackMove() {
+    if (currentSequenceIndex >= 0) {
+        currentSequenceIndex--;
+        
+        // Temporarily disable animation for the entire playback process
+        const wasAnimationEnabled = sg.state.animation.enabled;
+        sg.set({ animation: { enabled: false } });
+
+        // Re-render board to initial state
+        sg.set({
+            sfen: {
+                board: selected.sfen,
+                hands: selected.hands,
+            },
+            lastDests: selected.opponentLastMovePosition,
+            turnColor: selected.player
+        });
+        
+        // Play moves up to current index without animation
+        for (let i = 0; i <= currentSequenceIndex; i++) {
+            applyMove(currentSequenceMoves[i], i, false);
+        }
+        
+        // Restore animation setting
+        sg.set({ animation: { enabled: wasAnimationEnabled } });
+        
+        updateContinuationControls();
+    }
+}
+
+function opposite(c) {
+    return c === "sente" ? "gote" : "sente";
+}
+
+function applyMove(moveUsi, index, animate = true) {
+    clearShapes();
+    if (!sg) return;
+
+    // Reset board to exactly where it should be if we are skipping animations
+    // to avoid any cumulative state errors
+    if (animate && index > 0) {
+        // We might want to ensure the board state is correct before playing next move
+    }
+
+    // Determine whose turn it is based on the move index
+    // index 0, 2, 4... are for the player who starts the puzzle (selected.player)
+    // index 1, 3, 5... are for the opponent
+    const isInitialPlayerTurn = (index % 2 === 0);
+    const playerColor = selected.player;
+    const opponentColor = playerColor === 'sente' ? 'gote' : 'sente';
+    const currentColor = isInitialPlayerTurn ? playerColor : opponentColor;
+
+    console.log(`[SEQUENCE] Applying move ${index}: ${moveUsi} for ${currentColor} (animate: ${animate})`);
+
+    // Force piece count in hand if it's a drop to avoid Shogiground blocking it
+    if (moveUsi.includes('*')) {
+        const roleStr = moveUsi[0].toLowerCase();
+        // Convert USI role to Shogiground role
+        const roleMap = {
+            'r': 'rook', 'b': 'bishop', 'g': 'gold', 's': 'silver', 
+            'n': 'knight', 'l': 'lance', 'p': 'pawn'
+        };
+        const role = roleMap[roleStr] || roleStr;
+        const dest = moveUsi.substring(2);
+
+        const hand = sg.state.hands.handMap.get(currentColor);
+        const count = hand ? (hand.get(role) || 0) : 0;
+        
+        if (count <= 0) {
+            console.warn(`[SEQUENCE] Piece ${role} not found in ${currentColor} hand. Forcing add to allow drop.`);
+            sg.addToHand({role, color: currentColor}, 1);
+        }
+        
+        sg.set({ turnColor: currentColor });
+        // Use true for 'spare' parameter to allow dropping even if piece is not in hand
+        // but since we manually added it, it should work either way.
+        // Also setting the role explicitly as it might be 'r' instead of 'rook' if not mapped
+        sg.drop({ role, color: currentColor }, dest, false, true);
+        
+        // Ensure piece is removed from hand after drop
+        sg.removeFromHand({ role, color: currentColor }, 1);
+    } else {
+        const orig = moveUsi.substring(0, 2);
+        const dest = moveUsi.substring(2, 4);
+        const prom = moveUsi.endsWith('+');
+        
+        sg.set({ turnColor: currentColor });
+        
+        // Check for capture before move
+        const capturedPiece = sg.state.pieces.get(dest);
+        
+        sg.move(orig, dest, prom);
+
+        if (capturedPiece) {
+            console.log(`[SEQUENCE] Captured ${capturedPiece.role} for ${currentColor}`);
+            // In Shogi, captured piece changes color and goes to capturer's hand
+            // We need to unpromote it if it was promoted
+            const unpromotedRole = Shogiops.variantUtil.unpromote("standard")(capturedPiece.role) || capturedPiece.role;
+            sg.addToHand({ role: unpromotedRole, color: currentColor }, 1);
+        }
+    }
+    
+    // Toggle turn color for next potential interaction
+    sg.set({ turnColor: opposite(currentColor) });
+}
+
+function initSequence(usiString) {
+    if (!usiString) return;
+    currentSequenceMoves = usiString.split(' ');
+    currentSequenceIndex = -1;
+    
+    isPlayingSequence = true;
+    clearShapes();
+    stopAutoplay();
+    
+    // Reset board to initial puzzle state
+    sg.set({
+        sfen: {
+            board: selected.sfen,
+            hands: selected.hands,
+        },
+        lastDests: selected.opponentLastMovePosition,
+        turnColor: selected.player,
+        animation: { enabled: false }
+    });
+    
+    // Reset turn color and movable state to ensure clean start
+    sg.set({ turnColor: selected.player, animation: { enabled: true } });
+
+    $("#continuation-controls").show();
+    updateContinuationControls();
+}
+
+function startAutoplay() {
+    if (autoplayInterval) return;
+    
+    $("#continuation-autoplay").html('<i class="bi bi-pause-fill"></i>').removeClass('btn-outline-success').addClass('btn-success');
+    
+    autoplayInterval = setInterval(() => {
+        if (!playNextMove()) {
+            stopAutoplay();
+        }
+    }, 1000);
+}
+
+function playSequence(usiString) {
+    initSequence(usiString);
+    // Add delay to ensure initial position is rendered and first move animation is visible
+    setTimeout(() => {
+        if (isPlayingSequence) {
+            playNextMove(); // Play the first move immediately
+            startAutoplay();
+        }
+    }, 200);
+}
+
+$("#continuation-next").click(function() {
+    stopAutoplay();
+    playNextMove();
+});
+
+$("#continuation-back").click(function() {
+    stopAutoplay();
+    playBackMove();
+});
+
+$("#continuation-autoplay").click(function() {
+    if (autoplayInterval) {
+        stopAutoplay();
+    } else {
+        if (currentSequenceIndex >= currentSequenceMoves.length - 1) {
+            // Restart if at end
+            initSequence(currentSequenceMoves.join(' '));
+        }
+        startAutoplay();
+    }
+});
+
+$(document).on('click', ".play-continuation-btn", function() {
+    const type = $(this).data('type');
+    if (selected && selected[type] && selected[type].usi) {
+        playSequence(selected[type].usi);
+    }
+});
+
+$("#play-continuation").click(function() {
+    if (selected && selected.best && selected.best.usi) {
+        playSequence(selected.best.usi);
+    }
+});
+
+$("#show-hints").click(function() {
+    if (selected) {
+        if (areHintsVisible) {
+            clearShapes();
+        } else {
+            stopAutoplay();
+            isPlayingSequence = false;
+            $("#continuation-controls").hide();
+            
+            // Reset board to initial puzzle state
+            sg.set({
+                sfen: {
+                    board: selected.sfen,
+                    hands: selected.hands,
+                },
+                lastDests: selected.opponentLastMovePosition,
+            });
+            
+            setHints(selected);
+        }
+    }
+});
+
 $(".lishogi-position").click( function () {
-    window.open("https://lishogi.org/analysis/standard/" + selected.sfen, "_blank");
+    const lishogiSfen = selected.sfen.replace(/ /g, '_');
+    window.open("https://lishogi.org/analysis/" + lishogiSfen, "_blank");
 });
 
 $(".prev-puzzle").click( function () {
     const currentId = parseInt(games.val());
-    if (currentId > 0) {
+    if (currentId > 0 && Array.isArray(selectedData)) {
         selectSituation(currentId - 1, selectedData);
     }
 });
 
 $(".next-puzzle").click( function () {
     const currentId = parseInt(games.val());
-    if (currentId < selectedData.length - 1) {
+    if (Array.isArray(selectedData) && currentId < selectedData.length - 1) {
         selectSituation(currentId + 1, selectedData);
     }
 });
@@ -191,6 +477,10 @@ $(".save-comment").click( function () {
 });
 
 function createIds(data) {
+    if (!Array.isArray(data)) {
+        console.error("createIds expected array, got:", typeof data, data);
+        return [];
+    }
     return data.map( (value, index) => {
             let obj = {}
             obj["id"] = index
@@ -212,6 +502,12 @@ function selectSituation(id, data) {
     games.trigger('change.select2');
     $('.content').html('<b>Play the correct move!</b>');
     $('.save-comment').hide();
+    $('#play-continuation').hide();
+    $('#continuation-options').hide().empty();
+    $('#continuation-controls').hide();
+    $('#show-hints').hide();
+    stopAutoplay();
+    isPlayingSequence = false;
     selected = data[id]
 
     // Update puzzle info panel
@@ -331,26 +627,32 @@ function formatComment(comment) {
 }
 
 function fireError(pos) {
+    if (isPlayingSequence) return;
+    const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'error',
         title: 'Failure',
         html: '<p>You played the bad move!</p> ' +
             '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/standard/' + pos.sfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
 }
 
 function fireWarning(pos) {
+    if (isPlayingSequence) return;
+    const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'warning',
         title: 'Warning',
         html: '<p>You didn\'t played one of the best 3 moves! Please analyze your move.</p>' +
             '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/standard/' + pos.sfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
 }
 
 function fireSuccess(pos, num) {
+    if (isPlayingSequence) return;
+    const lishogiSfen = pos.sfen.replace(/ /g, '_');
     let msg;
     switch (num) {
         case 1:
@@ -368,7 +670,7 @@ function fireSuccess(pos, num) {
         title: 'Success',
         html: '<p> ' + msg + '</p> ' +
             '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/standard/' + pos.sfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
 }
 
@@ -417,14 +719,39 @@ function fireSave(text) {
 }
 
 function setHints(pos) {
+    if (isPlayingSequence) return;
     sg.setAutoShapes([setHint(pos.best_move), setHint(pos.second_move), setHint(pos.third_move),
         setHint(pos.your_move)].filter(elements => {
         return elements !== null;
     }))
+    areHintsVisible = true;
 }
 
 function resolveMove(pos, r0, r1, r2, r3) {
     $(".content").html(formatComment(pos.comment))
+    $("#show-hints").show();
+    
+    // Add continuation buttons for top 3 moves
+    let continuationHtml = "";
+    if (pos.best && pos.best.usi && pos.best.usi.split(' ').length > 0) {
+        continuationHtml += `<button class="btn btn-sm btn-outline-success play-continuation-btn me-1 mb-1" data-type="best"><i class="bi bi-1-circle me-1"></i>Top 1</button>`;
+    }
+    if (pos.second && pos.second.usi && pos.second.usi.split(' ').length > 0) {
+        continuationHtml += `<button class="btn btn-sm btn-outline-warning play-continuation-btn me-1 mb-1" data-type="second"><i class="bi bi-2-circle me-1"></i>Top 2</button>`;
+    }
+    if (pos.third && pos.third.usi && pos.third.usi.split(' ').length > 0) {
+        continuationHtml += `<button class="btn btn-sm btn-outline-info play-continuation-btn me-1 mb-1" data-type="third"><i class="bi bi-3-circle me-1"></i>Top 3</button>`;
+    }
+    
+    if (continuationHtml) {
+        $("#continuation-options").html(continuationHtml).show();
+        $("#play-continuation").hide(); // Hide the old single button
+        // Initialize sequence data even before user clicks "Play", so manual stepping works
+        // But maybe better wait for click to avoid clearing arrows prematurely if they just finished the puzzle
+    }
+
+    if (isPlayingSequence) return;
+
     if (r0 !== -1) {
         fireError(pos)
     } else {
@@ -460,36 +787,40 @@ function generateConfig(pos) {
             },
             movePromotionDialog: (orig, dest) => {
                 const piece = sg.state.pieces.get(orig);
+                if (!piece) return false;
                 const capture = sg.state.pieces.get(dest) | undefined;
                 return Shogiops.variantUtil.pieceCanPromote("standard")(piece, Shogiops.parseSquare(orig), Shogiops.parseSquare(dest), capture)
                     && !Shogiops.variantUtil.pieceForcePromote("standard")(piece, Shogiops.parseSquare(dest))
             },
             forceMovePromotion: (orig, dest) => {
                 const piece = sg.state.pieces.get(orig);
+                if (!piece) return false;
                 return Shogiops.variantUtil.pieceForcePromote("standard")(piece, Shogiops.parseSquare(dest))
             },
         },
         events: {
             move: (a, b, prom) => {
-                setHints(pos)
+                if (isPlayingSequence) return;
                 $(".content").html(formatComment(pos.comment))
 
                 let r0 = isMove(pos.your_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 0)
                 let r1 = isMove(pos.best_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 1)
                 let r2 = isMove(pos.second_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 2)
                 let r3 = isMove(pos.third_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 3)
+                setHints(pos)
                 resolveMove(pos, r0, r1, r2, r3)
 
                 $(".save-comment").show()
             },
             drop: (piece, key, prom) => {
-                setHints(pos)
+                if (isPlayingSequence) return;
                 $(".content").html(formatComment(pos.comment))
 
                 let r0 = isMove(pos.your_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 0)
                 let r1 = isMove(pos.best_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 1)
                 let r2 = isMove(pos.second_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 2)
                 let r3 = isMove(pos.third_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 3)
+                setHints(pos)
                 resolveMove(pos, r0, r1, r2, r3)
 
                 $(".save-comment").show()

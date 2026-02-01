@@ -11,18 +11,13 @@ object ViewerRoutes extends BaseRoutes {
 
   @cask.get("/viewer")
   def viewer(hash: Option[String] = None, request: cask.Request) = {
-    redirectToConfiguredHostIfNeeded(request).getOrElse {
-      val userEmail = getSessionUserEmail(request)
-      if (oauthEnabled && userEmail.isEmpty) {
-        logger.info(s"[VIEWER] Redirecting to /login because userEmail is empty")
-        noCacheRedirect("/login")
-      } else {
-        val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-        cask.Response(
-          renderViewer(userEmail, settings).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
-      }
+    withAuth(request, "viewer") { email =>
+      val userEmail = Some(email)
+      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      cask.Response(
+        renderViewer(userEmail, settings).render,
+        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+      )
     }
   }
 
@@ -39,7 +34,9 @@ object ViewerRoutes extends BaseRoutes {
         link(rel := "stylesheet", href := "/assets/css/site.css"),
         link(rel := "stylesheet", href := "/assets/css/puzzle.css"),
         link(rel := "stylesheet", href := "/assets/css/common.css"),
-        link(href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css", rel := "stylesheet"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
+        link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
@@ -60,13 +57,13 @@ object ViewerRoutes extends BaseRoutes {
                   div(cls := "col-md-12")(
                     div(cls := "input-group input-group-sm flex-nowrap")(
                       button(cls := "btn btn-outline-secondary prev-puzzle", title := "Previous Puzzle") (
-                        i(cls := "bi bi-chevron-left")
+                        i(cls := "bi bi-chevron-left"), tag("span")(cls := "d-none d-lg-inline ms-1")("Prev")
                       ),
                       select(cls := "games form-control", style := "width: auto; flex-grow: 1; margin: 0;")(
                         option(value := "")("Select a puzzle...")
                       ),
                       button(cls := "btn btn-outline-secondary next-puzzle", title := "Next Puzzle") (
-                        i(cls := "bi bi-chevron-right")
+                        tag("span")(cls := "d-none d-lg-inline me-1")("Next"), i(cls := "bi bi-chevron-right")
                       )
                     ),
                     div(cls := "mt-2")(
@@ -76,24 +73,24 @@ object ViewerRoutes extends BaseRoutes {
                       )
                     ),
                     button(cls := "btn btn-sm btn-outline-warning reload-data w-100 mt-2", title := "Reload data from DB") (
-                      i(cls := "bi bi-arrow-clockwise me-1"), "Reload Data"
+                      i(cls := "bi bi-arrow-clockwise me-1"), tag("span")(cls := "d-none d-lg-inline")("Reload Data"), tag("span")(cls := "d-inline d-lg-none")("Reload")
                     )
                   )
                 ),
                 div(cls := "row g-2 align-items-center")(
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-secondary random w-100", title := "Random Puzzle") (
-                      i(cls := "bi bi-shuffle me-1"), "Random"
+                      i(cls := "bi bi-shuffle me-1"), tag("span")(cls := "d-none d-lg-inline")("Random")
                     )
                   ),
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-info lishogi-game w-100", title := "View on Lishogi") (
-                      i(cls := "bi bi-box-arrow-up-right me-1"), "Game"
+                      i(cls := "bi bi-box-arrow-up-right me-1"), tag("span")(cls := "d-none d-lg-inline")("Game")
                     )
                   ),
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-outline-info lishogi-position w-100", title := "Analyze on Lishogi") (
-                      i(cls := "bi bi-search me-1"), "Pos"
+                      i(cls := "bi bi-search me-1"), tag("span")(cls := "d-none d-lg-inline")("Pos")
                     )
                   )
                 )
@@ -106,6 +103,24 @@ object ViewerRoutes extends BaseRoutes {
                   div(id := "turn-text", cls := "badge bg-secondary mb-1")("-"),
                   div(id := "players-text", cls := "text-muted mb-3", style := "font-size: 0.8rem;")("-"),
                   div(id := "material-text", style := "display:none")("-"),
+                  button(id := "play-continuation", cls := "btn btn-sm btn-outline-success w-100 mb-2", style := "display:none") (
+                    i(cls := "bi bi-play-fill me-1"), "Play continuation"
+                  ),
+                  div(id := "continuation-options", cls := "mb-2", style := "display:none")(),
+                  div(id := "continuation-controls", cls := "btn-group btn-group-sm w-100 mb-2", style := "display:none") (
+                    button(id := "continuation-back", cls := "btn btn-outline-secondary", title := "Back") (
+                      i(cls := "bi bi-skip-start-fill")
+                    ),
+                    button(id := "continuation-autoplay", cls := "btn btn-outline-success", title := "Autoplay") (
+                      i(cls := "bi bi-play-fill")
+                    ),
+                    button(id := "continuation-next", cls := "btn btn-outline-secondary", title := "Next") (
+                      i(cls := "bi bi-skip-end-fill")
+                    )
+                  ),
+                  button(id := "show-hints", cls := "btn btn-sm btn-outline-info w-100 mb-2") (
+                    i(cls := "bi bi-lightbulb-fill me-1"), "Show Hints"
+                  ),
                   textarea(cls := "content mt-2 form-control", style := "display:none")(),
                   button(cls := "btn btn-primary save-comment mt-2", style := "display:none")("Save Comment")
                 )
@@ -124,38 +139,42 @@ object ViewerRoutes extends BaseRoutes {
   }
 
   @cask.get("/data")
-  def puzzles(hash: Option[String] = None) = {
-    val puzzles = hash match {
-      case Some(h) => Await.result(GameRepository.getPuzzlesForGame(h), 10.seconds)
-      case None => Await.result(GameRepository.getAllPuzzles(), 10.seconds)
-    }
-    
-    val sortedPuzzles = puzzles.sortBy { doc =>
-      doc.get("move_number").map { v =>
-        if (v.isInt32) v.asInt32().getValue
-        else if (v.isInt64) v.asInt64().getValue.toInt
-        else if (v.isDouble) v.asDouble().getValue.toInt
-        else 0
-      }.getOrElse(0)
-    }
+  def puzzles(hash: Option[String] = None, request: cask.Request) = {
+    withAuthJson(request, "viewer") { _ =>
+      val puzzles = hash match {
+        case Some(h) => Await.result(GameRepository.getPuzzlesForGame(h), 10.seconds)
+        case None => Await.result(GameRepository.getAllPuzzles(), 10.seconds)
+      }
+      
+      val sortedPuzzles = puzzles.sortBy { doc =>
+        doc.get("move_number").map { v =>
+          if (v.isInt32) v.asInt32().getValue
+          else if (v.isInt64) v.asInt64().getValue.toInt
+          else if (v.isDouble) v.asDouble().getValue.toInt
+          else 0
+        }.getOrElse(0)
+      }
 
-    val jsonArray = sortedPuzzles.map { doc =>
-      ujson.read(doc.toJson())
+      val jsonArray = sortedPuzzles.map { doc =>
+        ujson.read(doc.toJson())
+      }
+      cask.Response(
+        ujson.Arr(jsonArray: _*),
+        headers = Seq("Content-Type" -> "application/json")
+      )
     }
-    cask.Response(
-      ujson.write(jsonArray),
-      headers = Seq("Content-Type" -> "application/json")
-    )
   }
 
   @cask.post("/viewer/toggle-public")
   def togglePublic(request: cask.Request) = {
-    val json = ujson.read(request.text())
-    val id = json("id").str
-    val isPublic = json("isPublic").bool
-    
-    Await.result(GameRepository.togglePuzzlePublic(id, isPublic), 10.seconds)
-    cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
+    withAuthJson(request, "viewer") { _ =>
+      val json = ujson.read(request.text())
+      val id = json("id").str
+      val isPublic = json("isPublic").bool
+      
+      Await.result(GameRepository.togglePuzzlePublic(id, isPublic), 10.seconds)
+      cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
+    }
   }
 
   initialize()

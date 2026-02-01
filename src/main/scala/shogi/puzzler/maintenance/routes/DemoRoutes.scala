@@ -12,12 +12,8 @@ object DemoRoutes extends BaseRoutes {
 
   @cask.get("/demo")
   def demo(request: cask.Request) = {
-    val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
-      logger.info(s"[DEMO] Redirecting to /login because userEmail is empty")
-      noCacheRedirect("/login")
-    } else {
-      val effectiveEmail = userEmail.orElse(Some("demo@example.com"))
+    withAuth(request, "demo") { email =>
+      val effectiveEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(effectiveEmail), 10.seconds)
       
       cask.Response(

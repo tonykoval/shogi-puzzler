@@ -11,9 +11,27 @@ object LoginRoutes extends BaseRoutes {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
       val host = request.headers.get("host").flatMap(_.headOption).getOrElse("unknown")
       logger.info(s"Login requested (Host: $host). Current user: ${getSessionUserEmail(request)}")
-      if (oauthEnabled && getSessionUserEmail(request).isDefined) {
+      
+      if (getSessionUserEmail(request).isDefined) {
         logger.info("User already logged in, redirecting to /my-games")
         noCacheRedirect("/my-games")
+      } else if (!oauthEnabled) {
+        val adminEmail = config.getString("app.security.admin-email")
+        cask.Response(
+          s"""
+             |<html>
+             |<head><title>Login (No OAuth)</title></head>
+             |<body>
+             |  <h1>Login (Development Mode)</h1>
+             |  <ul>
+             |    <li><a href="/login-as?email=${urlEncode(adminEmail)}">Login as Admin ($adminEmail)</a></li>
+             |    <li><a href="/login-as?email=test@example.com">Login as Test User (test@example.com)</a></li>
+             |  </ul>
+             |</body>
+             |</html>
+             |""".stripMargin,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ noCacheHeaders
+        )
       } else {
         logger.info(s"Redirecting to Google OAuth from $host")
 
@@ -27,6 +45,36 @@ object LoginRoutes extends BaseRoutes {
 
         noCacheRedirect(authUrl)
       }
+    }
+  }
+
+  @cask.get("/login-as")
+  def loginAs(email: String, request: cask.Request) = {
+    if (oauthEnabled) {
+      noCacheRedirect("/")
+    } else {
+      logger.info(s"Logging in as: $email (OAuth disabled)")
+      val mockUserJson = ujson.Obj(
+        "email" -> email,
+        "name" -> email.split("@").head.capitalize,
+        "picture" -> ""
+      )
+      val sessionToken = encodeSession(mockUserJson)
+      cask.Response(
+        "",
+        statusCode = 302,
+        headers = Seq("Location" -> "/my-games") ++ noCacheHeaders,
+        cookies = Seq(
+          cask.Cookie(
+            name = "session",
+            value = sessionToken,
+            httpOnly = true,
+            maxAge = 60 * 60 * 24 * 30,
+            path = "/",
+            sameSite = "Lax"
+          )
+        )
+      )
     }
   }
 
@@ -72,18 +120,10 @@ object LoginRoutes extends BaseRoutes {
 
       logger.info(s"User authenticated: email=$email")
 
-      if (!allowedEmails.contains(email)) {
+      if (!isEmailAllowed(email)) {
         logger.info(s"❌ Access denied for $email")
 
-        return cask.Response(
-          s"""
-          <h1>403 - Forbidden</h1>
-          <p>User <b>$email</b> is not authorized.</p>
-          <a href="/">Back to Home</a>
-          """,
-          statusCode = 403,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
+        return noCacheRedirect("/")
       }
 
       logger.info(s"✅ Access granted for $email")

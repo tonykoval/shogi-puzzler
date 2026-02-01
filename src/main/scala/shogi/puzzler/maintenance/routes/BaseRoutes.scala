@@ -10,6 +10,9 @@ import javax.crypto.spec.SecretKeySpec
 import java.util.Base64
 import java.nio.charset.StandardCharsets
 import java.net.URI
+import shogi.puzzler.db.UserRepository
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 object BaseRoutes {
   private val logger = LoggerFactory.getLogger(getClass)
@@ -40,17 +43,51 @@ abstract class BaseRoutes extends Routes {
   protected val oauthClientId = config.getString("app.oauth.google.client-id")
   protected val oauthClientSecret = config.getString("app.oauth.google.client-secret")
   protected val oauthRedirectUri = config.getString("app.oauth.google.redirect-uri")
-  protected val allowedEmails: Set[String] = {
-    val raw = config.getString("app.security.allowed-emails")
-    val emails = raw
-      .stripPrefix("[").stripSuffix("]")
-      .split(",")
-      .map(_.trim)
-      .map(_.replaceAll("^[\"\\\\]+|[\"\\\\]+$", ""))
-      .filter(_.nonEmpty)
-      .toSet
-    logger.info(s"[AUTH] Allowed emails: ${emails.mkString(", ")}")
-    emails
+
+  protected def isEmailAllowed(email: String): Boolean = {
+    Await.result(UserRepository.getUser(email), 10.seconds).isDefined
+  }
+
+  protected def getUserRole(email: String): Option[String] = {
+    Await.result(UserRepository.getUser(email), 10.seconds).map(_.role)
+  }
+
+  protected def canAccessPage(email: String, page: String): Boolean = {
+    Await.result(UserRepository.getUser(email), 10.seconds).exists { u =>
+      u.role == "ADMIN" || u.allowedPages.contains("*") || u.allowedPages.contains(page)
+    }
+  }
+
+  protected def withAuth(request: cask.Request, page: String)(f: String => cask.Response[String]): cask.Response[String] = {
+    redirectToConfiguredHostIfNeeded(request).getOrElse {
+      val userEmail = getSessionUserEmail(request)
+      if (userEmail.isEmpty) {
+        logger.info(s"[$page] Redirecting to /login because userEmail is empty")
+        noCacheRedirect("/login")
+      } else {
+        val email = userEmail.get
+        if (!canAccessPage(email, page)) {
+          logger.warn(s"[$page] User $email is not authorized for this page")
+          noCacheRedirect("/")
+        } else {
+          f(email)
+        }
+      }
+    }
+  }
+
+  protected def withAuthJson(request: cask.Request, page: String)(f: String => cask.Response[Value]): cask.Response[Value] = {
+    val userEmail = getSessionUserEmail(request)
+    if (userEmail.isEmpty) {
+      cask.Response(ujson.Obj("error" -> "Unauthorized"), statusCode = 401, headers = Seq("Content-Type" -> "application/json"))
+    } else {
+      val email = userEmail.get
+      if (!canAccessPage(email, page)) {
+        cask.Response(ujson.Obj("error" -> "Forbidden"), statusCode = 403, headers = Seq("Content-Type" -> "application/json"))
+      } else {
+        f(email)
+      }
+    }
   }
 
   protected val noCacheHeaders = Seq(
@@ -132,6 +169,14 @@ abstract class BaseRoutes extends Routes {
   }
 
   protected def corsResponse[T](data: T): cask.Response[T] = {
-    cask.Response(data, headers = Seq("Access-Control-Allow-Origin" -> "*"))
+    val contentType = data match {
+      case _: String => 
+        if (data.asInstanceOf[String].trim.startsWith("[") || data.asInstanceOf[String].trim.startsWith("{"))
+          Seq("Content-Type" -> "application/json")
+        else
+          Seq("Content-Type" -> "text/plain; charset=utf-8")
+      case _ => Nil
+    }
+    cask.Response(data, headers = Seq("Access-Control-Allow-Origin" -> "*") ++ contentType)
   }
 }

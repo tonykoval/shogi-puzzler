@@ -241,14 +241,14 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
         )
       ),
       bestMoveDetails = getPiece(
-        bestMove.usiNotation,
+        bestMove.usiNotation.split(" ").head,
         Color(sfenComponents(1)(0)).get,
         Some(1),
         Some(povScoreToWrapScoreForPlayer(bestMove.evaluationScore, game.playerColorInGame))
       ),
       secondMoveDetails = secondBestMove.flatMap(move =>
         getPiece(
-          move.usiNotation,
+          move.usiNotation.split(" ").head,
           Color(sfenComponents(1)(0)).get,
           Some(2),
           Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
@@ -256,7 +256,7 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       ),
       thirdMoveDetails = thirdBestMove.flatMap(move =>
         getPiece(
-          move.usiNotation,
+          move.usiNotation.split(" ").head,
           Color(sfenComponents(1)(0)).get,
           Some(3),
           Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
@@ -299,18 +299,18 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
                                        ): String = {
     val blunderMoveUsi = positionAfter.moveHistoryToPosition.lastOption.map(_.usi).getOrElse("")
     val blunderMoveDesc = getMove(blunderMoveUsi, positionBefore.positionSfen.value).getOrElse("unknown")
-    val bestMoveDesc = getMove(bestMove.usiNotation, positionBefore.positionSfen.value).getOrElse("unknown")
+    val bestMoveDesc = getMove(bestMove.usiNotation.split(" ").head, positionBefore.positionSfen.value).getOrElse("unknown")
 
     val blunderLine = s"Blunder [$blunderMoveDesc, score: (${positionBefore.evaluationScore.forPlayer(game.playerColorInGame)} → ${positionAfter.evaluationScore.forPlayer(game.playerColorInGame)})]"
     val bestLine = s"Best [$bestMoveDesc, score: (${positionBefore.evaluationScore.forPlayer(game.playerColorInGame)} → ${bestMove.evaluationScore.forPlayer(game.playerColorInGame)})]"
 
     val secondLine = secondBest.map { move =>
-      val moveDesc = getMove(move.usiNotation, positionBefore.positionSfen.value).getOrElse("unknown")
+      val moveDesc = getMove(move.usiNotation.split(" ").head, positionBefore.positionSfen.value).getOrElse("unknown")
       s"Second [$moveDesc, score: (${positionBefore.evaluationScore.forPlayer(game.playerColorInGame)} → ${move.evaluationScore.forPlayer(game.playerColorInGame)})]"
     }.getOrElse("")
 
     val thirdLine = thirdBest.map { move =>
-      val moveDesc = getMove(move.usiNotation, positionBefore.positionSfen.value).getOrElse("unknown")
+      val moveDesc = getMove(move.usiNotation.split(" ").head, positionBefore.positionSfen.value).getOrElse("unknown")
       s"Third [$moveDesc, score: (${positionBefore.evaluationScore.forPlayer(game.playerColorInGame)} → ${move.evaluationScore.forPlayer(game.playerColorInGame)})]"
     }.getOrElse("")
 

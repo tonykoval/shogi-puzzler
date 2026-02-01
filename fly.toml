@@ -17,10 +17,13 @@ primary_region = "ord"
 [env]
   ENGINE_PATH = "engine/yaneuraou_linux"
   APP_OAUTH_ENABLED = "false"
+  APP_OAUTH_REDIRECT_URI = "https://shogi-puzzler.fly.dev/callback"
   APP_ANALYSIS_SHALLOW_LIMIT = "1"
   APP_ANALYSIS_DEEP_LIMIT = "10"
-  APP_SECURITY_ALLOWED_EMAILS = "your.email@example.com"
+  APP_ANALYSIS_WIN_CHANCE_DROP_THRESHOLD = "0.1"
+  APP_ANALYSIS_WORKERS = "1"
+  APP_SECURITY_ADMIN_EMAIL = "your.email@example.com"
 
-# Note: APP_MONGODB_URI should be set via fly secrets:
-# fly secrets set APP_MONGODB_URI=mongodb+srv://...
-# APP_OAUTH_REDIRECT_URI should also be updated to your fly.dev URL
+# Note: APP_MONGODB_URI, APP_SECURITY_SESSION_SECRET, TECH_DOJO81_USERNAME, TECH_DOJO81_PASSWORD,
+# APP_OAUTH_CLIENT_ID, and APP_OAUTH_CLIENT_SECRET should be set via fly secrets:
+# fly secrets set APP_MONGODB_URI=... APP_SECURITY_SESSION_SECRET=... etc.

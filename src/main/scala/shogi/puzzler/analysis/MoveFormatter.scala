@@ -16,7 +16,7 @@ object MoveFormatter {
       case Some(1) => "primary"
       case Some(2) => "alternative1"
       case Some(3) => "alternative2"
-      case None    => "alternative0"
+      case _       => "alternative0"
     }
   }
 
@@ -28,7 +28,7 @@ object MoveFormatter {
       case Some(1) => "1st"
       case Some(2) => "2nd"
       case Some(3) => "3rd"
-      case None    => "your"
+      case _       => "your"
     }
   }
 

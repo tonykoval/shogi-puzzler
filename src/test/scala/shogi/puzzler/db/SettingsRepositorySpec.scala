@@ -51,5 +51,25 @@ class SettingsRepositorySpec extends AnyWordSpec with Matchers {
         
         loaded shouldBe value
     }
+
+    "share OCR profiles between users" in {
+      val userA = "user-a-" + java.util.UUID.randomUUID().toString
+      val userB = "user-b-" + java.util.UUID.randomUUID().toString
+      
+      val profileName = "SharedProfile-" + java.util.UUID.randomUUID().toString
+      val regions = Map("board" -> shogi.puzzler.maintenance.Rect(10, 20, 30, 40))
+      
+      // User A saves a profile
+      Await.result(SettingsRepository.updateGlobalOcrProfiles(Map(profileName -> regions)), 5.seconds)
+      
+      // User B should see it
+      val loadedB = Await.result(SettingsRepository.getAppSettings(Some(userB)), 5.seconds)
+      loadedB.ocrProfiles should contain key profileName
+      loadedB.ocrProfiles(profileName)("board").x shouldBe 10
+      
+      // User A should also see it
+      val loadedA = Await.result(SettingsRepository.getAppSettings(Some(userA)), 5.seconds)
+      loadedA.ocrProfiles should contain key profileName
+    }
   }
 }

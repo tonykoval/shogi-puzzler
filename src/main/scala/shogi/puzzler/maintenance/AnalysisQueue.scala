@@ -1,0 +1,140 @@
+package shogi.puzzler.maintenance
+
+import org.slf4j.LoggerFactory
+import shogi.Color
+import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
+import shogi.puzzler.db.{AppSettings, GameRepository, SettingsRepository}
+import shogi.puzzler.domain.ParsedGame
+import shogi.puzzler.game.GameLoader
+import shogi.puzzler.maintenance.routes.MaintenanceRoutes.getEngineManager
+import shogi.puzzler.serialization.PuzzleJsonSerializer
+
+import java.util.concurrent.{LinkedBlockingQueue, Semaphore}
+import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration._
+import scala.concurrent.Await
+import scala.util.{Failure, Success, Try}
+
+object AnalysisQueue {
+  private val logger = LoggerFactory.getLogger(getClass)
+  private implicit val ec: ExecutionContext = ExecutionContext.global
+
+  private case class AnalysisTask(
+      taskId: String,
+      kif: String,
+      player: String,
+      source: String,
+      userEmail: Option[String]
+  )
+
+  private val queue = new LinkedBlockingQueue[AnalysisTask]()
+  private var currentWorkers = 0
+  private val workersLock = new Object()
+
+  def enqueue(taskId: String, kif: String, player: String, source: String, userEmail: Option[String]): Unit = {
+    logger.info(s"[AnalysisQueue] Enqueuing task $taskId for player $player")
+    queue.put(AnalysisTask(taskId, kif, player, source, userEmail))
+    TaskManager.updateProgress(taskId, s"In queue (position: ${queue.size()})")
+    ensureWorkers()
+  }
+
+  private def ensureWorkers(): Unit = {
+    workersLock.synchronized {
+      val settings = Await.result(SettingsRepository.getAppSettings(Some("global")), 5.seconds)
+      val targetWorkers = settings.analysisWorkers
+      
+      while (currentWorkers < targetWorkers) {
+        startWorker()
+        currentWorkers += 1
+      }
+    }
+  }
+
+  private def startWorker(): Unit = {
+    Future {
+      while (true) {
+        val task = queue.take()
+        // Update positions of remaining tasks
+        updateQueuePositions()
+        
+        processTask(task)
+      }
+    }
+  }
+
+  private def updateQueuePositions(): Unit = {
+    import scala.jdk.CollectionConverters._
+    queue.asScala.zipWithIndex.foreach { case (t, index) =>
+      TaskManager.updateProgress(t.taskId, s"In queue (position: ${index + 1})")
+    }
+  }
+
+  private def processTask(task: AnalysisTask): Unit = {
+    val taskId = task.taskId
+    TaskManager.updateProgress(taskId, "Initializing analysis...")
+    val kif = task.kif
+    val player = task.player
+    val source = task.source
+    val userEmail = task.userEmail
+
+    try {
+      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val engineManager = getEngineManager(settings.enginePath)
+
+      logger.info(s"[AnalysisQueue] Starting task $taskId for player $player using engine: ${settings.enginePath}")
+      val analyzer = new GameAnalyzer(engineManager)
+      val extractor = new PuzzleExtractor(analyzer)
+
+      TaskManager.updateProgress(taskId, "Parsing KIF...")
+      val parsedGame = GameLoader.parseKif(kif, Some(player))
+      
+      logger.info(s"[AnalysisQueue] Task $taskId: Starting shallow analysis...")
+      val shallowResults = analyzer.analyzeShallow(parsedGame, settings.shallowLimit, msg => TaskManager.updateProgress(taskId, msg))
+
+      TaskManager.updateProgress(taskId, "Extracting puzzles...")
+      logger.info(s"[AnalysisQueue] Task $taskId: Shallow analysis complete. Extracting puzzles...")
+      val puzzles = extractor.extract(
+        parsedGame,
+        shallowResults,
+        settings.winChanceDropThreshold,
+        settings.deepLimit
+      )
+
+      val kifHash = GameRepository.md5Hash(kif)
+      val exists = Await.result(GameRepository.exists(kif), 10.seconds)
+
+      if (!exists) {
+        val gameDetails = Map(
+          "sente" -> parsedGame.sentePlayerName.getOrElse("Unknown"),
+          "gote" -> parsedGame.gotePlayerName.getOrElse("Unknown"),
+          "date" -> parsedGame.gameDate.getOrElse(""),
+          "site" -> parsedGame.gameSite.getOrElse(source)
+        )
+        try {
+          Await.result(GameRepository.saveGame(kif, gameDetails), 10.seconds)
+        } catch {
+          case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
+            Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+        }
+      } else {
+        Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+      }
+
+      Await.result(GameRepository.markAsAnalyzed(kifHash), 10.seconds)
+      val scores = shallowResults.map(_.evaluationScore.forPlayer(Color.Sente).toNumeric)
+      Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
+
+      puzzles.foreach { p =>
+        val json = ujson.write(PuzzleJsonSerializer.puzzleToJson(p))
+        Await.result(GameRepository.savePuzzle(json, kifHash), 10.seconds)
+      }
+
+      logger.info(s"[AnalysisQueue] Task $taskId complete. ${puzzles.size} puzzles found.")
+      TaskManager.complete(taskId, s"Analysis complete. ${puzzles.size} puzzles found.")
+    } catch {
+      case e: Exception =>
+        logger.error(s"[AnalysisQueue] Task $taskId failed", e)
+        TaskManager.fail(taskId, e.getMessage)
+    }
+  }
+}

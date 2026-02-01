@@ -7,6 +7,13 @@ $(document).on('click', '.graph-btn', function() {
   $('#graphTitle').text('Analysis: ' + senteName + ' vs ' + goteName);
   
   $.get('/maintenance-analysis-data?hash=' + hash, function(data) {
+    if (typeof data === 'string') {
+        try {
+            data = JSON.parse(data);
+        } catch (e) {
+            console.error("Failed to parse analysis data", e);
+        }
+    }
     const ctx = document.getElementById('analysisChart').getContext('2d');
     
     if (analysisChart) {
@@ -159,7 +166,7 @@ $(document).on('click', '.delete-analysis-btn', function() {
       const keysToRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('maintenance_games_')) {
+        if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
           keysToRemove.push(key);
         }
       }
@@ -168,9 +175,9 @@ $(document).on('click', '.delete-analysis-btn', function() {
       const lishogiName = $('#lishogiNickname').val();
       const shogiwarsName = $('#shogiwarsNickname').val();
       const dojo81Name = $('#dojo81Nickname').val();
-      if (lishogiName) window.maintenance.doFetch('lishogi', lishogiName, false);
-      if (shogiwarsName) window.maintenance.doFetch('shogiwars', shogiwarsName, false);
-      if (dojo81Name) window.maintenance.doFetch('dojo81', dojo81Name, false);
+      if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
+      if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
+      if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
     },
     error: function(xhr) {
       alert('Error deleting analysis: ' + xhr.statusText);
@@ -183,22 +190,54 @@ window.maintenance = {
   isFetchingShogiwars: false,
   isFetchingDojo81: false,
   autoFetched: false,
+  activePolls: {},
   
   pollTask: function(taskId, $results, onComplete, onError, onProgress, taskType = 'fetch') {
+    if (typeof taskId === 'object' && taskId !== null && taskId.taskId) {
+        taskId = taskId.taskId;
+    }
+    if (!taskId) {
+        console.warn('pollTask called without taskId');
+        return;
+    }
+    if (this.activePolls[taskId]) {
+        console.log('Already polling for task:', taskId);
+        return;
+    }
+    this.activePolls[taskId] = true;
+
     const self = this;
     const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
     if (taskId && !activeTasks[taskId]) {
-      console.log('Adding task to localStorage:', taskId, taskType);
+      console.log('Adding task to localStorage (if missing):', taskId, taskType);
       activeTasks[taskId] = { type: taskType, startedAt: Date.now() };
       localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
     }
 
+    console.log('Starting polling for task:', taskId, 'taskType:', taskType, 'hasResultsContainer:', !!$results);
+
     const poll = () => {
       $.get('/maintenance-task-status?id=' + taskId)
         .done(function(task) {
-          if (task.status === 'running') {
+          if (typeof task === 'string') {
+            try {
+              task = JSON.parse(task);
+            } catch (e) {
+              console.error('Failed to parse task status:', e, task);
+              if (onError) onError('Invalid response from server');
+              return;
+            }
+          }
+          if (task.error) {
+            console.error('Task error from backend:', taskId, task.error);
+            if (onError) onError(task.error);
+            return;
+          }
+          if (task.status === 'running' || task.status === 'waiting') {
             if (onProgress) onProgress(task.message);
-            else if ($results) $results.find('.status-message').text(task.message);
+            else if ($results && $results.length > 0) {
+               $results.find('.status-message').text(task.message);
+            }
             
             // Periodically re-check if button exists to disable it if it was just rendered
             const currentActive = JSON.parse(localStorage.getItem('activeTasks') || '{}');
@@ -217,21 +256,28 @@ window.maintenance = {
 
             setTimeout(poll, 1000);
           } else {
-            console.log('Task finished:', taskId, task.status);
+            console.log('Task finished status check:', taskId, task.status, 'hasOnComplete:', !!onComplete);
+            delete self.activePolls[taskId];
             // Remove from active tasks
             const currentActive = JSON.parse(localStorage.getItem('activeTasks') || '{}');
             delete currentActive[taskId];
             localStorage.setItem('activeTasks', JSON.stringify(currentActive));
 
             if (task.status === 'completed') {
-              if (onComplete) onComplete(task.resultHtml);
+              if (onComplete) {
+                console.log('Calling onComplete for task:', taskId);
+                onComplete(task.resultHtml);
+              } else {
+                console.warn('Task completed but no onComplete callback for taskId:', taskId);
+              }
             } else if (task.status === 'failed') {
               if (onError) onError(task.error || 'Unknown error');
             }
           }
         })
         .fail(function(xhr) {
-          console.error('Polling failed for task:', taskId, xhr.statusText);
+          console.error('Polling failed for task:', taskId, xhr.status, xhr.statusText);
+          delete self.activePolls[taskId];
           if (onError) onError('Failed to poll task status: ' + xhr.statusText);
         });
     };
@@ -239,6 +285,7 @@ window.maintenance = {
   },
 
   doFetch: function(source, name, force = false) {
+    console.log('doFetch called for', source, name, 'force:', force);
     if (!name || name.trim() === '') {
       alert('Please enter a nickname for ' + source);
       return;
@@ -258,6 +305,9 @@ window.maintenance = {
     else if (isDojo81) resultsId = '#dojo81-results';
     
     const $results = $(resultsId);
+    if ($results.length === 0) {
+      console.error('Results container not found:', resultsId);
+    }
     const self = this;
 
     const cacheKey = 'maintenance_games_' + source + '_' + name + '_' + maxGames;
@@ -265,6 +315,7 @@ window.maintenance = {
     if (!force) {
       const cachedHtml = localStorage.getItem(cacheKey);
       if (cachedHtml) {
+        console.log('Loading from cache for', source, 'length:', cachedHtml.length);
         $results.html(cachedHtml);
         return;
       }
@@ -281,27 +332,76 @@ window.maintenance = {
       this.isFetchingDojo81 = true;
     }
     
+    // Check if there is already an active task for this source/name
+    const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+    const existingTaskId = Object.keys(activeTasks).find(tid => {
+      const t = activeTasks[tid];
+      return t.type === 'fetch' && t.source === source && t.name === name;
+    });
+
+    if (existingTaskId) {
+      console.log('Task already running for', source, name, 'taskId:', existingTaskId);
+      // It will be resumed by the resume logic in ready() or it's already polling
+      return;
+    }
+    
     $results.html('<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div> <span class="status-message">Fetching games for ' + name + '...</span></div>');
     
     $.get('/maintenance-fetch?player=' + encodeURIComponent(name) + '&source=' + source + '&force=' + force + '&limit=' + maxGames)
       .done(function(data) {
+        console.log('Fetch response for ' + source + ':', data);
         let taskId;
         try {
-          taskId = JSON.parse(data).taskId;
+          if (typeof data === 'string') {
+            const parsed = JSON.parse(data);
+            taskId = parsed.taskId;
+          } else if (typeof data === 'object' && data !== null) {
+            taskId = data.taskId;
+          }
+          
+          if (!taskId) {
+            // If we don't have a taskId, maybe it's the result HTML directly
+            console.log('No taskId in response, setting HTML directly for', source);
+            if ($results.length > 0) {
+                $results.html(data);
+                localStorage.setItem(cacheKey, typeof data === 'string' ? data : JSON.stringify(data));
+            }
+            if (isLishogi) self.isFetchingLishogi = false;
+            else if (isShogiwars) self.isFetchingShogiwars = false;
+            else if (isDojo81) self.isFetchingDojo81 = false;
+            return;
+          }
         } catch(e) {
-          // Fallback if backend returned HTML directly (shouldn't happen now)
-          $results.html(data);
-          localStorage.setItem(cacheKey, data);
+          console.error('Error parsing fetch response:', e, data);
+          if ($results.length > 0) {
+              $results.html(data);
+              localStorage.setItem(cacheKey, data);
+          }
           if (isLishogi) self.isFetchingLishogi = false;
           else if (isShogiwars) self.isFetchingShogiwars = false;
           else if (isDojo81) self.isFetchingDojo81 = false;
           return;
         }
         
+        const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
+        activeTasks[taskId] = { 
+          type: 'fetch', 
+          startedAt: Date.now(), 
+          source: source,
+          name: name,
+          maxGames: maxGames
+        };
+        localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
+        
         self.pollTask(taskId, $results, 
           function(html) { // complete
-            $results.html(html);
-            localStorage.setItem(cacheKey, html);
+            console.log('Task complete, HTML length:', html.length, 'Target container:', resultsId, 'Container exists:', $(resultsId).length > 0);
+            $(resultsId).html(html);
+            try {
+              localStorage.setItem(cacheKey, html);
+            } catch (e) {
+              console.warn('Failed to save to localStorage:', e);
+            }
             if (isLishogi) self.isFetchingLishogi = false;
             else if (isShogiwars) self.isFetchingShogiwars = false;
             else if (isDojo81) self.isFetchingDojo81 = false;
@@ -341,9 +441,6 @@ window.maintenance = {
       } else if (filterType === 'indb') {
         if (status === 'indb' || status === 'analyzed') $row.show();
         else $row.hide();
-      } else if (filterType === 'new') {
-        if (status === 'new') $row.show();
-        else $row.hide();
       }
     });
   }
@@ -378,7 +475,7 @@ $(document).on('click', '#storeBtn', function() {
       const keysToRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('maintenance_games_')) {
+        if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
           keysToRemove.push(key);
         }
       }
@@ -387,9 +484,9 @@ $(document).on('click', '#storeBtn', function() {
       const lishogiName = $('#lishogiNickname').val();
       const shogiwarsName = $('#shogiwarsNickname').val();
       const dojo81Name = $('#dojo81Nickname').val();
-      if (lishogiName) window.maintenance.doFetch('lishogi', lishogiName, false);
-      if (shogiwarsName) window.maintenance.doFetch('shogiwars', shogiwarsName, false);
-      if (dojo81Name) window.maintenance.doFetch('dojo81', dojo81Name, false);
+      if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
+      if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
+      if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
     },
     error: function(xhr) {
       alert('Error storing games: ' + xhr.statusText);
@@ -430,7 +527,7 @@ $(document).on('click', '.analyze-btn', function() {
       const keysToRemove = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && key.startsWith('maintenance_games_')) {
+        if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
           keysToRemove.push(key);
         }
       }
@@ -438,7 +535,13 @@ $(document).on('click', '.analyze-btn', function() {
 
       let taskId;
       try {
-        taskId = JSON.parse(data).taskId;
+        if (typeof data === 'string') {
+          taskId = JSON.parse(data).taskId;
+        } else if (typeof data === 'object' && data !== null) {
+          taskId = data.taskId;
+        }
+        
+        if (!taskId) throw new Error('No taskId in response');
       } catch(e) {
         alert('Analysis complete!');
         location.reload();
@@ -453,6 +556,16 @@ $(document).on('click', '.analyze-btn', function() {
         function(result) { // complete
           alert(result || 'Analysis complete!');
           
+          // Invalidate cache again on completion
+          const keysToRemove = [];
+          for (let i = 0; i < localStorage.length; i++) {
+            const key = localStorage.key(i);
+            if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
+              keysToRemove.push(key);
+            }
+          }
+          keysToRemove.forEach(key => localStorage.removeItem(key));
+
           const lishogiName = $('#lishogiNickname').val();
           const shogiwarsName = $('#shogiwarsNickname').val();
           const dojo81Name = $('#dojo81Nickname').val();
@@ -544,6 +657,18 @@ $(document).ready(function() {
 
     // Discover tasks from other tabs/backend
     $.get('/maintenance-tasks', function(tasks) {
+      if (typeof tasks === 'string') {
+        try {
+          tasks = JSON.parse(tasks);
+        } catch (e) {
+          console.error('Failed to parse maintenance tasks:', e);
+          return;
+        }
+      }
+      if (!Array.isArray(tasks)) {
+        console.error('Maintenance tasks is not an array:', tasks);
+        return;
+      }
       const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
       tasks.forEach(task => {
         if (task.status === 'running' && !activeTasks[task.id]) {
@@ -556,6 +681,14 @@ $(document).ready(function() {
       // Resume active tasks (now includes discovered ones)
       Object.keys(activeTasks).forEach(taskId => {
         const task = activeTasks[taskId];
+        // If task is already being polled by doFetch, don't start another polling
+        // But doFetch might have been skipped if taskId was found in activeTasks.
+        // The safest is to ensure only one pollTask runs per taskId.
+        if (window.maintenance.activePolls && window.maintenance.activePolls[taskId]) {
+           console.log('Task already polling, skipping resume:', taskId);
+           return;
+        }
+        
         console.log('Resuming active task:', taskId, task);
         if (task.type === 'analyze') {
           window.maintenance.pollTask(taskId, null, 
@@ -585,8 +718,35 @@ $(document).ready(function() {
              delete activeTasks[taskId];
              localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
           } else {
-             // Poll but don't update UI containers as they might be handled by autoFetch
-             window.maintenance.pollTask(taskId, null, null, null, null, 'fetch');
+             // Try to find the results container for this fetch task
+             let resultsId = null;
+             if (task.source === 'lishogi') resultsId = '#lishogi-results';
+             else if (task.source === 'shogiwars') resultsId = '#shogiwars-results';
+             else if (task.source === 'dojo81') resultsId = '#dojo81-results';
+             
+             const $results = resultsId ? $(resultsId) : null;
+             const cacheKey = (task.source && task.name && task.maxGames) ? 
+                ('maintenance_games_' + task.source + '_' + task.name + '_' + task.maxGames) : null;
+
+             window.maintenance.pollTask(taskId, $results, 
+                function(html) { // complete
+                  if ($results && $results.length > 0) {
+                    console.log('Resumed fetch task complete, updating UI:', taskId);
+                    $results.html(html);
+                  }
+                  if (cacheKey) {
+                    try {
+                      localStorage.setItem(cacheKey, html);
+                    } catch (e) { console.warn('Failed to save to localStorage:', e); }
+                  }
+                  if (task.source === 'lishogi') window.maintenance.isFetchingLishogi = false;
+                  else if (task.source === 'shogiwars') window.maintenance.isFetchingShogiwars = false;
+                  else if (task.source === 'dojo81') window.maintenance.isFetchingDojo81 = false;
+                }, 
+                function(err) { console.error('Resumed fetch task failed:', err); }, 
+                null, 
+                'fetch'
+             );
           }
         }
       });

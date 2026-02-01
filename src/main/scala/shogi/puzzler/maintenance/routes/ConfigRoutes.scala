@@ -21,18 +21,13 @@ object ConfigRoutes extends BaseRoutes {
 
   @cask.get("/config")
   def configPage(request: cask.Request) = {
-    redirectToConfiguredHostIfNeeded(request).getOrElse {
-      val userEmail = getSessionUserEmail(request)
-      if (oauthEnabled && userEmail.isEmpty) {
-        logger.info(s"[CONFIG] Redirecting to /login because userEmail is empty")
-        noCacheRedirect("/login")
-      } else {
-        val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-        cask.Response(
-          renderConfigPage(userEmail, settings).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
-      }
+    withAuth(request, "config") { email =>
+      val userEmail = Some(email)
+      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      cask.Response(
+        renderConfigPage(userEmail, settings).render,
+        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+      )
     }
   }
 
@@ -56,6 +51,7 @@ object ConfigRoutes extends BaseRoutes {
             div(cls := "mb-3")(
               label(cls := "form-label")("Engine"),
               select(name := "engine_path", cls := "form-select bg-dark text-light border-secondary")(
+                option(value := "", if (settings.enginePath.isEmpty) selected := "selected" else "")("Select an engine..."),
                 listEngines().map { eng =>
                   option(value := eng, if (eng == settings.enginePath) selected := "selected" else "")(eng)
                 }
@@ -72,7 +68,13 @@ object ConfigRoutes extends BaseRoutes {
                 Components.configField("Win Chance Drop Threshold", "win_chance_threshold", settings.winChanceDropThreshold.toString, "number", Some("any"))
               )
             ),
-            button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")("Save Configuration")
+            button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")("Save Configuration"),
+            if (settings.shogiwarsNickname == "Tonyko") {
+              div(cls := "alert alert-warning mt-3")(
+                i(cls := "bi bi-exclamation-triangle-fill me-2"),
+                "Note: You are currently using default nicknames. Change them to see your own games."
+              )
+            } else ""
           )
         )
       )
@@ -80,14 +82,37 @@ object ConfigRoutes extends BaseRoutes {
   }
 
   @cask.postForm("/config")
-  def saveConfig(lishogi_nickname: String, shogiwars_nickname: String, dojo81_nickname: String, engine_path: String, shallow_limit: Int, deep_limit: Int, win_chance_threshold: Double, request: cask.Request) = {
+  def saveConfig(
+      lishogi_nickname: String,
+      shogiwars_nickname: String,
+      dojo81_nickname: String,
+      engine_path: String,
+      shallow_limit: Int,
+      deep_limit: Int,
+      win_chance_threshold: Double,
+      request: cask.Request
+  ) = {
     val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
+    if (userEmail.isEmpty) {
       noCacheRedirect("/login")
     } else {
-      val targetUser = userEmail.getOrElse("global")
-      logger.info(s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold")
-      val settings = AppSettings(lishogi_nickname, shogiwars_nickname, dojo81_nickname, engine_path, shallow_limit, deep_limit, win_chance_threshold, isConfigured = true)
+      val targetUser = userEmail.get
+      logger.info(
+        s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold"
+      )
+
+      val currentSettings = Await.result(SettingsRepository.getAppSettings(userEmail), 5.seconds)
+      val settings = currentSettings.copy(
+        lishogiNickname = lishogi_nickname,
+        shogiwarsNickname = shogiwars_nickname,
+        dojo81Nickname = dojo81_nickname,
+        enginePath = engine_path,
+        shallowLimit = shallow_limit,
+        deepLimit = deep_limit,
+        winChanceDropThreshold = win_chance_threshold,
+        isConfigured = true
+      )
+      
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
       
       noCacheRedirect("/my-games")

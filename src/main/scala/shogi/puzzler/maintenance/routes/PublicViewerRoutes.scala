@@ -14,11 +14,7 @@ object PublicViewerRoutes extends BaseRoutes {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
       // No auth required for public puzzles
       val userEmail = getSessionUserEmail(request)
-      // We still want settings for some UI parts, but we can use a default if not logged in
-      val settings = userEmail match {
-        case Some(email) => Await.result(SettingsRepository.getAppSettings(Some(email)), 10.seconds)
-        case None => AppSettings.default
-      }
+      val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
       
       cask.Response(
         renderPublicViewer(userEmail, settings).render,
@@ -40,7 +36,9 @@ object PublicViewerRoutes extends BaseRoutes {
         link(rel := "stylesheet", href := "/assets/css/site.css"),
         link(rel := "stylesheet", href := "/assets/css/puzzle.css"),
         link(rel := "stylesheet", href := "/assets/css/common.css"),
-        link(href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css", rel := "stylesheet"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
+        link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
@@ -61,13 +59,13 @@ object PublicViewerRoutes extends BaseRoutes {
                   div(cls := "col-md-12")(
                     div(cls := "input-group input-group-sm flex-nowrap")(
                       button(cls := "btn btn-outline-secondary prev-puzzle", title := "Previous Puzzle") (
-                        i(cls := "bi bi-chevron-left")
+                        i(cls := "bi bi-chevron-left"), tag("span")(cls := "d-none d-lg-inline ms-1")("Prev")
                       ),
                       select(cls := "games form-control", style := "width: auto; flex-grow: 1; margin: 0;")(
                         option(value := "")("Select a puzzle...")
                       ),
                       button(cls := "btn btn-outline-secondary next-puzzle", title := "Next Puzzle") (
-                        i(cls := "bi bi-chevron-right")
+                        tag("span")(cls := "d-none d-lg-inline me-1")("Next"), i(cls := "bi bi-chevron-right")
                       )
                     )
                   )
@@ -75,17 +73,17 @@ object PublicViewerRoutes extends BaseRoutes {
                 div(cls := "row g-2 align-items-center")(
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-secondary random w-100", title := "Random Puzzle") (
-                      i(cls := "bi bi-shuffle me-1"), "Random"
+                      i(cls := "bi bi-shuffle me-1"), tag("span")(cls := "d-none d-lg-inline")("Random")
                     )
                   ),
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-info lishogi-game w-100", title := "View on Lishogi") (
-                      i(cls := "bi bi-box-arrow-up-right me-1"), "Game"
+                      i(cls := "bi bi-box-arrow-up-right me-1"), tag("span")(cls := "d-none d-lg-inline")("Game")
                     )
                   ),
                   div(cls := "col-4")(
                     button(cls := "btn btn-sm btn-outline-info lishogi-position w-100", title := "Analyze on Lishogi") (
-                      i(cls := "bi bi-search me-1"), "Pos"
+                      i(cls := "bi bi-search me-1"), tag("span")(cls := "d-none d-lg-inline")("Pos")
                     )
                   )
                 )
@@ -121,7 +119,7 @@ object PublicViewerRoutes extends BaseRoutes {
       ujson.read(doc.toJson())
     }
     cask.Response(
-      ujson.write(jsonArray),
+      ujson.Arr(jsonArray: _*),
       headers = Seq("Content-Type" -> "application/json")
     )
   }

@@ -1,5 +1,5 @@
 # Stage 1: Build YaneuraOu engine for Linux
-FROM ubuntu:22.04 AS engine-builder
+FROM ubuntu:noble AS engine-builder
 
 RUN apt-get update && apt-get install -y \
     make \
@@ -29,14 +29,16 @@ COPY . .
 RUN sbt assembly
 
 # Stage 3: Final Runtime Image
-FROM eclipse-temurin:17-jre-jammy
+FROM eclipse-temurin:17-jre-noble
 
 WORKDIR /app
 
-# Install Playwright dependencies
+# Install Playwright dependencies and Tesseract OCR
 RUN apt-get update && apt-get install -y \
     curl \
     gnupg \
+    libtesseract5 \
+    tesseract-ocr \
     && curl -sL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
@@ -54,6 +56,10 @@ RUN chmod +x ./engine/yaneuraou_linux
 # Copy the eval folder from the repository
 # Putting it inside engine/ folder so it's next to the binary
 COPY eval/ ./engine/eval/
+
+# Copy tessdata and model folders
+COPY tessdata/ ./tessdata/
+COPY model/ ./model/
 
 # Set environment variables
 ENV ENGINE_PATH=engine/yaneuraou_linux
