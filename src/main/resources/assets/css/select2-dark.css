@@ -1,0 +1,78 @@
+/* Select2 Dark Theme for Bootstrap 5 */
+.select2-container--bootstrap-5 .select2-selection {
+    background-color: var(--c-bg-input, #24211e);
+    border-color: var(--c-border, #404040);
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-selection--single .select2-selection__rendered {
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice {
+    background-color: var(--c-bg-page, #110f0e);
+    border-color: var(--c-border, #404040);
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove {
+    color: var(--c-font-clearer, #fff) !important;
+    border-right: 1px solid var(--c-border, #404040);
+}
+
+.select2-container--bootstrap-5 .select2-selection--multiple .select2-selection__choice__remove:hover {
+    color: var(--c-font-clearer, #fff) !important;
+    background-color: var(--c-bg-metal-hover, #3c3b39);
+}
+
+.select2-container--bootstrap-5 .select2-dropdown {
+    background-color: var(--c-bg-popup, #383633);
+    border-color: var(--c-border, #404040);
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-results__option {
+    color: var(--c-font-clear, #ccc) !important;
+}
+
+.select2-container--bootstrap-5 .select2-results__option--highlighted[aria-selected] {
+    background-color: var(--c-primary, #2b88de) !important;
+    color: var(--c-primary-over, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-results__option[aria-selected=true] {
+    background-color: var(--m-primary_bg-box_mix_40, #284c6d) !important;
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-search__field {
+    background-color: var(--c-bg-input, #24211e);
+    border-color: var(--c-border, #404040);
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+.select2-container--bootstrap-5 .select2-selection--multiple .select2-search__field {
+    color: var(--c-font-clearer, #fff) !important;
+}
+
+/* Placeholder color */
+.select2-container--bootstrap-5 .select2-selection--multiple .select2-search__field::placeholder {
+    color: var(--c-font-dim, #a3a3a3) !important;
+}
+
+.select2-container--bootstrap-5.select2-container--focus .select2-selection,
+.select2-container--bootstrap-5.select2-container--open .select2-selection {
+    border-color: var(--c-primary, #2b88de);
+    box-shadow: 0 0 0 0.25rem rgba(43, 136, 222, 0.25);
+}
+
+/* Disabled state */
+.select2-container--bootstrap-5.select2-container--disabled .select2-selection {
+    background-color: var(--c-bg-page, #110f0e) !important;
+    opacity: 0.5;
+}
+
+/* Fix for background in tables */
+.table-dark .select2-container--bootstrap-5 .select2-selection {
+    background-color: var(--c-bg-input, #24211e) !important;
+}

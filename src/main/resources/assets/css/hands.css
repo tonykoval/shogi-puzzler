@@ -1,5 +1,50 @@
-.sg-wrap {
+.sg-hand-wrap {
   height: 100%;
+  width: 12% !important;
+  max-width: none;
+  min-height: 0;
+  background: transparent !important;
+  border: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  flex-shrink: 0;
+}
+
+.sg-hand-wrap sg-hand {
+  display: flex !important;
+  flex-wrap: nowrap !important;
+  position: static !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  flex-direction: column !important;
+  width: 100% !important;
+  height: 100% !important;
+  padding: 2% 0 !important;
+  box-sizing: border-box !important;
+}
+
+.sg-hand-wrap.hand-bottom sg-hand {
+  flex-direction: column-reverse !important;
+}
+
+sg-hp-wrap {
+  width: 100% !important;
+  height: auto !important;
+  flex: 0 0 auto !important;
+  position: relative !important;
+  aspect-ratio: 11/12 !important;
+  max-height: calc(100% / 7) !important;
+}
+
+sg-hp-wrap piece {
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0 !important;
+  transform: none !important;
+  display: block !important;
+  background-size: contain !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
 }
 
 sg-hand sg-hp-wrap {
@@ -35,27 +80,7 @@ sg-hp-wrap[data-nb='0']:not(.selected):not(.drawing)::after {
   align-self: center;
 }
 
-.sg-hand-wrap {
-  position: relative;
-  width: 200px;
-  height: 200px;
-  background-image: url('../board/new_board.png');
-  background-size: cover;
-  margin: 0 1rem;
-  border: 1px solid black;
-}
-.sg-hand-wrap sg-hand {
-  display: flex;
-  flex-wrap: wrap;
-  position: absolute;
-  align-items: center;
-  justify-content: center;
-  flex-direction: row-reverse;
-  width: 100%;
-  height: 100%;
-  top: 0;
-  left: 0;
-}
+
 
 .hand-bottom {
   align-self: flex-end;
@@ -71,8 +96,8 @@ sg-hand.promotion::after {
 sg-hand piece {
   display: block;
   position: relative;
-  width: calc(500px / 9);
-  height: calc(500px / 9);
+  width: 100%;
+  height: 100%;
   margin: unset;
   cursor: pointer;
   pointer-events: auto;

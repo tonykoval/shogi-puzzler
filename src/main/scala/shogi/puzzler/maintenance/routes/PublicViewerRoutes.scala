@@ -40,6 +40,8 @@ object PublicViewerRoutes extends BaseRoutes {
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
         link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
+        link(rel := "stylesheet", href := "/assets/css/d9x9.css"),
+        link(rel := "stylesheet", href := "/assets/css/hands.css"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
@@ -47,10 +49,10 @@ object PublicViewerRoutes extends BaseRoutes {
         div(id := "main-wrap")(
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
-              div(cls := "sg-wrap d-9x9")(
-                tag("sg-hand-wrap")(id := "hand-top"),
-                div(id := "dirty"),
-                tag("sg-hand-wrap")(id := "hand-bottom")
+              div(cls := "sg-wrap d-9x9", style := "display: flex; aspect-ratio: 9/11;")(
+                tag("sg-hand-wrap")(id := "hand-top", style := "width: 12%; height: 100%;"),
+                div(id := "dirty", style := "flex: 1;"),
+                tag("sg-hand-wrap")(id := "hand-bottom", style := "width: 12%; height: 100%;")
               )
             ),
             div(cls := "puzzle__controls")(
@@ -67,6 +69,9 @@ object PublicViewerRoutes extends BaseRoutes {
                       button(cls := "btn btn-outline-secondary next-puzzle", title := "Next Puzzle") (
                         tag("span")(cls := "d-none d-lg-inline me-1")("Next"), i(cls := "bi bi-chevron-right")
                       )
+                    ),
+                    button(cls := "btn btn-sm btn-outline-warning reload-data w-100 mt-2", title := "Reload data from DB") (
+                      i(cls := "bi bi-arrow-clockwise me-1"), tag("span")(cls := "d-none d-lg-inline")("Reload Data"), tag("span")(cls := "d-inline d-lg-none")("Reload")
                     )
                   )
                 ),
@@ -95,7 +100,26 @@ object PublicViewerRoutes extends BaseRoutes {
                   div(cls := "content")("Play the correct move!"),
                   div(id := "turn-text", cls := "badge bg-secondary mb-1")("-"),
                   div(id := "players-text", cls := "text-muted mb-3", style := "font-size: 0.8rem;")("-"),
-                  div(id := "material-text", style := "display:none")("-")
+                  div(id := "material-text", style := "display:none")("-"),
+                  button(id := "play-continuation", cls := "btn btn-sm btn-outline-success w-100 mb-2", style := "display:none") (
+                    i(cls := "bi bi-play-fill me-1"), "Play continuation"
+                  ),
+                  div(id := "continuation-options", cls := "mb-2", style := "display:none")(),
+                  div(id := "continuation-controls", cls := "btn-group btn-group-sm w-100 mb-2", style := "display:none") (
+                    button(id := "continuation-back", cls := "btn btn-outline-secondary", title := "Back") (
+                      i(cls := "bi bi-skip-start-fill")
+                    ),
+                    button(id := "continuation-autoplay", cls := "btn btn-outline-success", title := "Autoplay") (
+                      i(cls := "bi bi-play-fill")
+                    ),
+                    button(id := "continuation-next", cls := "btn btn-outline-secondary", title := "Next") (
+                      i(cls := "bi bi-skip-end-fill")
+                    )
+                  ),
+                  button(id := "show-hints", cls := "btn btn-sm btn-outline-info w-100 mb-2") (
+                    i(cls := "bi bi-lightbulb-fill me-1"), "Show Hints"
+                  ),
+                  textarea(cls := "content mt-2 form-control", style := "display:none")()
                 )
               )
             )
@@ -115,7 +139,17 @@ object PublicViewerRoutes extends BaseRoutes {
   def publicPuzzles() = {
     val puzzles = Await.result(GameRepository.getPublicPuzzles(), 10.seconds)
     
-    val jsonArray = puzzles.map { doc =>
+    val sortedPuzzles = puzzles.sortBy { doc =>
+      val ts = doc.get("timestamp").map { v =>
+        if (v.isInt64) v.asInt64().getValue
+        else if (v.isInt32) v.asInt32().getValue.toLong
+        else if (v.isDouble) v.asDouble().getValue.toLong
+        else 0L
+      }.getOrElse(0L)
+      -ts // Descending
+    }
+
+    val jsonArray = sortedPuzzles.map { doc =>
       ujson.read(doc.toJson())
     }
     cask.Response(

@@ -1,0 +1,24 @@
+.d-9x9 sg-squares {
+  grid-template: repeat(9, 1fr) / repeat(9, 1fr);
+  border-top: 1px solid black;
+  border-left: 1px solid black;
+}
+
+.d-9x9 sg-promotion sg-promotion-square {
+  width: calc(100% / 9);
+  height: calc(100% / 9);
+}
+
+.d-9x9 sg-board piece {
+  width: calc(200% / 9);
+  height: calc(200% / 9);
+  margin: calc(-50% / 9 / 11 * 12) calc(-50% / 9);
+}
+
+.d-9x9 sg-hand piece {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  background-size: contain !important;
+  background-position: center !important;
+}

@@ -99,6 +99,11 @@ object Components {
                 a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-eye me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("My Puzzle Viewer"), scalatags.Text.all.span(cls := "d-lg-none")("Viewer"))
               )
             } else (),
+            if (canAccess("puzzle-creator")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzle Creator"), scalatags.Text.all.span(cls := "d-lg-none")("Creator"))
+              )
+            } else (),
             li(cls := "nav-item")(
               a(cls := "nav-link", href := "/puzzles")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Public Puzzles"), scalatags.Text.all.span(cls := "d-lg-none")("Puzzles"))
             ),

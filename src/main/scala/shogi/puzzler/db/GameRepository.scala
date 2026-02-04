@@ -20,6 +20,9 @@ trait GameRepositoryTrait {
   def findByPlayerAndSource(playerName: String, source: String, limit: Int = 100): Future[Seq[Document]]
   def countPuzzlesForGame(gameKifHash: String): Future[Long]
   def deleteAnalysis(kifHash: String): Future[UpdateResult]
+  def deletePuzzle(puzzleId: String): Future[org.mongodb.scala.result.DeleteResult]
+  def updatePuzzle(puzzleId: String, json: String): Future[UpdateResult]
+  def getPuzzlesCreatedBy(email: String): Future[Seq[Document]]
   def saveScores(kifHash: String, scores: Seq[Int]): Future[UpdateResult]
   def getGameByKif(kif: String): Future[Option[Document]]
   def getGameByHash(kifHash: String): Future[Option[Document]]
@@ -163,6 +166,19 @@ object GameRepository extends GameRepositoryTrait {
 
   def countPuzzlesForGame(gameKifHash: String): Future[Long] = {
     puzzlesCollection.countDocuments(org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash)).toFuture()
+  }
+
+  def deletePuzzle(puzzleId: String): Future[org.mongodb.scala.result.DeleteResult] = {
+    puzzlesCollection.deleteOne(org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(puzzleId))).toFuture()
+  }
+
+  def updatePuzzle(puzzleId: String, json: String): Future[org.mongodb.scala.result.UpdateResult] = {
+    val doc = Document(org.bson.BsonDocument.parse(json))
+    puzzlesCollection.replaceOne(org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(puzzleId)), doc).toFuture()
+  }
+
+  def getPuzzlesCreatedBy(email: String): Future[Seq[Document]] = {
+    puzzlesCollection.find(org.mongodb.scala.model.Filters.equal("created_by", email)).toFuture()
   }
 
   def deleteAnalysis(kifHash: String): Future[org.mongodb.scala.result.UpdateResult] = {

@@ -118,7 +118,7 @@ object MoveFormatter {
                 visualHint = HintDropWrap(
                   origin = HintOrig(
                     pieceRole = dropMove.role.name,
-                    pieceColor = colorToMove.name
+                    pieceColor = if (colorToMove == shogi.Sente) "black" else "white"
                   ),
                   destination = dropMove.pos.key,
                   visualBrush = getArrowColor(moveRanking),

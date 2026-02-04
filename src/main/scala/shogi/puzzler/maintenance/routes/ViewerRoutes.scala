@@ -38,6 +38,8 @@ object ViewerRoutes extends BaseRoutes {
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
         link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
+        link(rel := "stylesheet", href := "/assets/css/d9x9.css"),
+        link(rel := "stylesheet", href := "/assets/css/hands.css"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
@@ -45,10 +47,10 @@ object ViewerRoutes extends BaseRoutes {
         div(id := "main-wrap")(
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
-              div(cls := "sg-wrap d-9x9")(
-                tag("sg-hand-wrap")(id := "hand-top"),
-                div(id := "dirty"),
-                tag("sg-hand-wrap")(id := "hand-bottom")
+              div(cls := "sg-wrap d-9x9", style := "display: flex; aspect-ratio: 9/11;")(
+                tag("sg-hand-wrap")(id := "hand-top", style := "width: 12%; height: 100%;"),
+                div(id := "dirty", style := "flex: 1;"),
+                tag("sg-hand-wrap")(id := "hand-bottom", style := "width: 12%; height: 100%;")
               )
             ),
             div(cls := "puzzle__controls")(
@@ -140,19 +142,31 @@ object ViewerRoutes extends BaseRoutes {
 
   @cask.get("/data")
   def puzzles(hash: Option[String] = None, request: cask.Request) = {
-    withAuthJson(request, "viewer") { _ =>
+    withAuthJson(request, "viewer") { email =>
       val puzzles = hash match {
         case Some(h) => Await.result(GameRepository.getPuzzlesForGame(h), 10.seconds)
-        case None => Await.result(GameRepository.getAllPuzzles(), 10.seconds)
+        case None => 
+          val all = Await.result(GameRepository.getAllPuzzles(), 10.seconds)
+          val myCustom = Await.result(GameRepository.getPuzzlesCreatedBy(email), 10.seconds)
+          (all ++ myCustom).distinctBy(_.getObjectId("_id"))
       }
       
       val sortedPuzzles = puzzles.sortBy { doc =>
-        doc.get("move_number").map { v =>
+        val moveNum = doc.get("move_number").map { v =>
           if (v.isInt32) v.asInt32().getValue
           else if (v.isInt64) v.asInt64().getValue.toInt
           else if (v.isDouble) v.asDouble().getValue.toInt
           else 0
         }.getOrElse(0)
+        
+        val ts = doc.get("timestamp").map { v =>
+          if (v.isInt64) v.asInt64().getValue
+          else if (v.isInt32) v.asInt32().getValue.toLong
+          else if (v.isDouble) v.asDouble().getValue.toLong
+          else 0L
+        }.getOrElse(0L)
+        
+        (-ts, moveNum)
       }
 
       val jsonArray = sortedPuzzles.map { doc =>
