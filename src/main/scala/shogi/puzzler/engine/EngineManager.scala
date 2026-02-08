@@ -97,4 +97,22 @@ class EngineManager(engineCommandPath: Seq[String]) {
 //    println(s"[ENGINE] Analysis complete, found ${results.size} lines")
     results
   }
+
+  /**
+   * Analyze a position with move history and return top moves.
+   *
+   * @param sfenPosition Position in SFEN notation
+   * @param moves Sequence of moves to apply before analysis
+   * @param searchLimit Time or depth limit for analysis
+   * @param multiPvCount Number of best moves to return (1 = best only)
+   * @return List of analysis results, one per requested line
+   */
+  def analyzeWithMoves(sfenPosition: String, moves: Seq[String], searchLimit: Limit, multiPvCount: Int = 1): Seq[Map[String, Any]] = {
+    if (!isInitialized) {
+      throw new IllegalStateException("Engine must be initialized before analysis")
+    }
+
+    val results = shogiEngine.analyzeWithMoves(sfenPosition, moves, searchLimit, multiPvCount)
+    results
+  }
 }

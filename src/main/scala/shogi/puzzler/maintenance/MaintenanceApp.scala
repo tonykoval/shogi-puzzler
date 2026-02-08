@@ -9,6 +9,7 @@ object MaintenanceApp extends cask.Main {
     LoginRoutes,
     MaintenanceRoutes,
     ViewerRoutes,
+    PuzzleCreatorRoutes,
     PublicViewerRoutes,
     RepertoireRoutes,
     ConfigRoutes,

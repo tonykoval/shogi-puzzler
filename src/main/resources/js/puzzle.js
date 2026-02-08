@@ -5,6 +5,22 @@ let currentSequenceIndex = -1;
 let autoplayInterval = null;
 let areHintsVisible = false;
 
+// Mapping between backend SFEN role notation and shogiops role notation
+const sfenToShogiopsRole = {
+    'K': 'king', 'R': 'rook', 'B': 'bishop', 'G': 'gold', 'S': 'silver',
+    'N': 'knight', 'L': 'lance', 'P': 'pawn',
+    '+R': 'promotedRook', '+B': 'promotedBishop', '+S': 'promotedSilver',
+    '+N': 'promotedKnight', '+L': 'promotedLance', '+P': 'promotedPawn'
+};
+
+// Convert SFEN role (e.g., "FU", "fu", "+P") to shogiops role (e.g., "pawn")
+function sfenRoleToShogiopsRole(sfenRole) {
+    // Remove any case prefixes and get the base role
+    const normalizedRole = sfenRole.replace(/^[+-]?/, '');
+    const upperRole = normalizedRole.toUpperCase();
+    return sfenToShogiopsRole[upperRole] || normalizedRole.toLowerCase();
+}
+
 const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
@@ -565,11 +581,12 @@ function selectSituation(id, data) {
 }
 
 function isMove(engineMove, playerMove, playerPositionMove, returnValue) {
-    if (engineMove !== null) {
+    if (engineMove !== null && engineMove !== undefined) {
         let result = false
-        if (engineMove.drop !== null) {
+        if (engineMove.drop !== null && engineMove.drop !== undefined) {
             if (playerPositionMove === "DROP") {
-                result = engineMove.drop.drop.role === playerMove.piece.role && engineMove.drop.drop.pos === playerMove.key;
+                const engineRole = sfenRoleToShogiopsRole(engineMove.drop.dropMove.pieceRole);
+                result = engineRole === playerMove.piece.role && engineMove.drop.dropMove.destinationSquare === playerMove.key;
             }
         } else {
             if (playerPositionMove === "MOVE") {
@@ -584,13 +601,13 @@ function isMove(engineMove, playerMove, playerPositionMove, returnValue) {
             return -1
         }
     } else {
-        return null;
+        return -1;
     }
 }
 
 function setHint(move) {
-    if (move !== null) {
-        if (move.drop !== null) {
+    if (move !== null && move !== undefined) {
+        if (move.drop !== null && move.drop !== undefined) {
             return move.drop.hint
         } else {
             return move.move.hint
@@ -764,6 +781,7 @@ function resolveMove(pos, r0, r1, r2, r3) {
 }
 
 function generateConfig(pos) {
+    console.log(pos)
     return {
         sfen: {
             board: pos.sfen,

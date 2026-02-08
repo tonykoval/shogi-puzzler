@@ -164,6 +164,61 @@ class YaneuraOu(
     }
   }
 
+  def analyzeWithMoves(
+               sfen: String,
+               moves: Seq[String],
+               limit: Limit = Limit(),
+               multiPv: Int =1
+             ): Vector[Map[String, Any]] = {
+
+    lock.lock()
+    try {
+      if (multiPv != multipv) {
+        multipv = multiPv
+        setOption("MultiPV", multiPv)
+      }
+
+      isReady()
+      
+      // Send position with move history
+      val positionCmd = if (moves.isEmpty) {
+        s"position sfen $sfen"
+      } else {
+        s"position sfen $sfen moves ${moves.mkString(" ")}"
+      }
+      send(positionCmd)
+
+      val go = mutable.ListBuffer("go")
+
+      limit.depth.foreach(d => go ++= Seq("depth", d.toString))
+      limit.nodes.foreach(n => go ++= Seq("nodes", n.toString))
+      limit.time.foreach(t => go ++= Seq("movetime", (t * 1000).toString))
+      limit.byoyomi.foreach(b => go ++= Seq("byoyomi", (b * 1000).toInt.toString))
+
+      send(go.mkString(" "))
+
+      val info = Vector.fill(multiPv)(mutable.Map[String, Any]())
+
+      while (true) {
+        val (cmd, arg) = recvUSI()
+        cmd match {
+          case "bestmove" =>
+            return info.map(_.toMap)
+
+          case "info" =>
+            parseInfo(arg, info)
+
+          case _ =>
+            logger.warn(s"Unexpected go response: $cmd $arg")
+        }
+      }
+
+      Vector.empty
+    } finally {
+      lock.unlock()
+    }
+  }
+
   private def parseInfo(
                          arg: String,
                          info: Vector[mutable.Map[String, Any]]

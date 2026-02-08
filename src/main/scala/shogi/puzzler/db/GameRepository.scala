@@ -23,11 +23,17 @@ trait GameRepositoryTrait {
   def saveScores(kifHash: String, scores: Seq[Int]): Future[UpdateResult]
   def getGameByKif(kif: String): Future[Option[Document]]
   def getGameByHash(kifHash: String): Future[Option[Document]]
+  def saveCustomPuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None): Future[InsertOneResult]
+  def getCustomPuzzles(userEmail: String): Future[Seq[Document]]
+  def getCustomPuzzle(id: String, userEmail: String): Future[Option[Document]]
+  def updateCustomPuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None): Future[UpdateResult]
+  def deleteCustomPuzzle(id: String, userEmail: String): Future[org.mongodb.scala.result.DeleteResult]
 }
 
 object GameRepository extends GameRepositoryTrait {
   private val collection = MongoDBConnection.gamesCollection
   private val puzzlesCollection = MongoDBConnection.puzzlesCollection
+  private val customPuzzlesCollection = MongoDBConnection.customPuzzlesCollection
 
   def saveGame(kif: String, gameDetails: Map[String, String]): Future[org.mongodb.scala.result.InsertOneResult] = {
     val doc = Document(
@@ -200,5 +206,79 @@ object GameRepository extends GameRepositoryTrait {
     val md = MessageDigest.getInstance("MD5")
     val digest = md.digest(s.getBytes)
     digest.map("%02x".format(_)).mkString
+  }
+
+  // Custom puzzle methods
+  def saveCustomPuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None): Future[InsertOneResult] = {
+    import org.mongodb.scala.bson.BsonString
+    import org.mongodb.scala.bson.collection.immutable.Document
+    
+    // Convert Map[String, String] to Document
+    val moveCommentsDoc = Document(moveComments.getOrElse(Map.empty).map { case (k, v) => k -> BsonString(v) })
+    
+    val doc = Document(
+      "name" -> name,
+      "sfen" -> sfen,
+      "user_email" -> userEmail,
+      "is_public" -> isPublic,
+      "comments" -> comments.getOrElse(""),
+      "selected_sequence" -> selectedSequence.getOrElse(Seq.empty),
+      "move_comments" -> moveCommentsDoc,
+      "created_at" -> System.currentTimeMillis(),
+      "updated_at" -> System.currentTimeMillis()
+    )
+    customPuzzlesCollection.insertOne(doc).toFuture()
+  }
+
+  def getCustomPuzzles(userEmail: String): Future[Seq[Document]] = {
+    customPuzzlesCollection
+      .find(org.mongodb.scala.model.Filters.equal("user_email", userEmail))
+      .sort(org.mongodb.scala.model.Sorts.descending("created_at"))
+      .toFuture()
+  }
+
+  def getCustomPuzzle(id: String, userEmail: String): Future[Option[Document]] = {
+    customPuzzlesCollection
+      .find(org.mongodb.scala.model.Filters.and(
+        org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(id)),
+        org.mongodb.scala.model.Filters.equal("user_email", userEmail)
+      ))
+      .first()
+      .toFutureOption()
+  }
+
+  def updateCustomPuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None): Future[UpdateResult] = {
+    import org.mongodb.scala.bson.BsonString
+    import org.mongodb.scala.bson.collection.immutable.Document
+    
+    val updates = scala.collection.mutable.ListBuffer[org.bson.conversions.Bson]()
+    
+    // Convert Map[String, String] to Document
+    val moveCommentsDoc = Document(moveComments.getOrElse(Map.empty).map { case (k, v) => k -> BsonString(v) })
+
+    updates += org.mongodb.scala.model.Updates.set("name", name)
+    updates += org.mongodb.scala.model.Updates.set("sfen", sfen)
+    updates += org.mongodb.scala.model.Updates.set("is_public", isPublic)
+    updates += org.mongodb.scala.model.Updates.set("comments", comments.getOrElse(""))
+    updates += org.mongodb.scala.model.Updates.set("selected_sequence", selectedSequence.getOrElse(Seq.empty))
+    updates += org.mongodb.scala.model.Updates.set("move_comments", moveCommentsDoc)
+    updates += org.mongodb.scala.model.Updates.set("updated_at", System.currentTimeMillis())
+    
+    customPuzzlesCollection.updateOne(
+      org.mongodb.scala.model.Filters.and(
+        org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(id)),
+        org.mongodb.scala.model.Filters.equal("user_email", userEmail)
+      ),
+      org.mongodb.scala.model.Updates.combine(updates.toList: _*)
+    ).toFuture()
+  }
+
+  def deleteCustomPuzzle(id: String, userEmail: String): Future[org.mongodb.scala.result.DeleteResult] = {
+    customPuzzlesCollection.deleteOne(
+      org.mongodb.scala.model.Filters.and(
+        org.mongodb.scala.model.Filters.equal("_id", new org.bson.types.ObjectId(id)),
+        org.mongodb.scala.model.Filters.equal("user_email", userEmail)
+      )
+    ).toFuture()
   }
 }

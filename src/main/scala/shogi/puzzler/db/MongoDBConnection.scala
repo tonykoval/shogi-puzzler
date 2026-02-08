@@ -13,6 +13,7 @@ object MongoDBConnection {
   
   val gamesCollection: MongoCollection[Document] = database.getCollection("games")
   val puzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
+  val customPuzzlesCollection: MongoCollection[Document] = database.getCollection("custom_puzzles")
   val settingsCollection: MongoCollection[Document] = database.getCollection("settings")
   val repertoireCollection: MongoCollection[Document] = database.getCollection("repertoire")
   val trainingPiecesCollection: MongoCollection[Document] = database.getCollection("training_pieces")
