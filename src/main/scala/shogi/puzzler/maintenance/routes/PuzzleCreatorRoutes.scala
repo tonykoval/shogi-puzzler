@@ -345,18 +345,27 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                     )
                   )
                 ),
-                div(cls := "row g-2 mb-3")(
-                  div(cls := "col-4")(
-                    label(cls := "form-label text-light")("Depth"),
-                    input(cls := "form-control form-control-sm", id := "analysis-depth", `type` := "number", value := "12", min := "1", max := "30")
+                div(cls := "row g-2 mb-2")(
+                  div(cls := "col-3")(
+                    label(cls := "form-label text-light small mb-1")("Depth"),
+                    input(cls := "form-control form-control-sm", id := "analysis-depth", `type` := "number", value := "15", min := "1", max := "50")
                   ),
-                  div(cls := "col-4")(
-                    label(cls := "form-label text-light")("Moves"),
+                  div(cls := "col-3")(
+                    label(cls := "form-label text-light small mb-1")("Time (s)"),
+                    input(cls := "form-control form-control-sm", id := "analysis-time", `type` := "number", value := "0", min := "0", max := "300", placeholder := "0=off")
+                  ),
+                  div(cls := "col-3")(
+                    label(cls := "form-label text-light small mb-1")("Moves"),
                     input(cls := "form-control form-control-sm", id := "analysis-moves", `type` := "number", value := "3", min := "1", max := "10")
                   ),
-                  div(cls := "col-4")(
-                    label(cls := "form-label text-light")("Candidates"),
+                  div(cls := "col-3")(
+                    label(cls := "form-label text-light small mb-1")("Candidates"),
                     input(cls := "form-control form-control-sm", id := "analysis-candidates", `type` := "number", value := "1", min := "1", max := "10")
+                  )
+                ),
+                div(cls := "row g-2 mb-3")(
+                  div(cls := "col-12")(
+                    small(cls := "text-muted")("Depth: search plies. Time: seconds per move (0=depth only). Both can be combined.")
                   )
                 )
               )
@@ -413,14 +422,18 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val moveComments = json.obj.get("moveComments").map { mc =>
         mc.obj.map { case (k, v) => k -> v.str }.toMap
       }
+      val analysisData = json.obj.get("analysisData").map(_.str)
+      val selectedCandidates = json.obj.get("selectedCandidates").map { sc =>
+        sc.arr.map(_.num.toInt).toSeq
+      }
       val id = json.obj.get("id").map(_.str)
-      
+
       val result = id match {
         case Some(puzzleId) =>
-          Await.result(GameRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments), 10.seconds)
+          Await.result(GameRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(GameRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments), 10.seconds)
+          Await.result(GameRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle saved successfully")
       }
       
@@ -449,11 +462,13 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val json = ujson.read(request.text())
       val sfen = json("sfen").str
       val multiPv = json.obj.get("multiPv").map(_.num.toInt).getOrElse(3)
-      val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(10)
-      
+      val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(15)
+      val time = json.obj.get("time").map(_.num.toInt).filter(_ > 0) // milliseconds from frontend
+
       try {
         val engineManager = getEngineManager(settings.enginePath)
-        val results = engineManager.analyze(sfen, Limit(depth = Some(depth)), multiPv)
+        val limit = Limit(depth = Some(depth), time = time)
+        val results = engineManager.analyze(sfen, limit, multiPv)
         
         println(s"[PUZZLE-CREATOR] Engine returned ${results.length} results")
         results.foreach { result =>
@@ -487,7 +502,11 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             "usi" -> usiMove,
             "score" -> ujson.Obj("kind" -> scoreKind, "value" -> scoreValue),
             "depth" -> ujson.Num(result.getOrElse("depth", depth).toString.toInt),
-            "pv" -> result.getOrElse("pv", "").toString
+            "pv" -> (result.get("pv") match {
+              case Some(pvList: List[_]) => pvList.mkString(" ")
+              case Some(pvStr: String) => pvStr
+              case _ => ""
+            })
           )
         }
         
@@ -517,10 +536,11 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       
       try {
         val engineManager = getEngineManager(settings.enginePath)
-        
-        // Analyze with specified depth and number of candidates
-        val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(12)
-        val sequences = analyzeMoveSequences(engineManager, sfen, numMoves, depth, multiPv)
+
+        // Analyze with specified depth, time, and number of candidates
+        val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(15)
+        val time = json.obj.get("time").map(_.num.toInt).filter(_ > 0) // seconds
+        val sequences = analyzeMoveSequences(engineManager, sfen, numMoves, depth, multiPv, time)
         
         cask.Response(
           ujson.Obj("success" -> true, "sequences" -> ujson.Arr(sequences.map(seq => ujson.Arr(seq: _*)): _*)),
@@ -537,12 +557,15 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     }
   }
 
-  private def analyzeMoveSequences(engineManager: EngineManager, initialSfen: String, numMoves: Int, depth: Int, multiPv: Int): Vector[Vector[ujson.Obj]] = {
+  private def analyzeMoveSequences(engineManager: EngineManager, initialSfen: String, numMoves: Int, depth: Int, multiPv: Int, timeSec: Option[Int] = None): Vector[Vector[ujson.Obj]] = {
+    // Build limit with depth and optional time (converted to milliseconds)
+    val limit = Limit(depth = Some(depth), time = timeSec.map(_ * 1000))
+
     // Get more candidates than requested to filter out duplicates
     val searchMultiPv = math.max(multiPv * 3, 10) // Get 3x more candidates to find unique ones
-    
+
     // Get all candidate first moves from the initial position
-    val initialResults = engineManager.analyze(initialSfen, Limit(depth = Some(depth)), searchMultiPv)
+    val initialResults = engineManager.analyze(initialSfen, limit, searchMultiPv)
     
     // Determine whose turn it is from the initial SFEN
     val initialColorToMove = sfenTurnToColor(initialSfen)
@@ -596,7 +619,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         
         // Analyze subsequent moves
         for (moveNum <- 1 until numMoves) {
-          val results = engineManager.analyzeWithMoves(initialSfen, moveHistory.toSeq, Limit(depth = Some(depth)), 1)
+          val results = engineManager.analyzeWithMoves(initialSfen, moveHistory.toSeq, limit, 1)
           
           if (results.nonEmpty && results.head.contains("pv")) {
             val pv = results.head("pv").asInstanceOf[List[String]]

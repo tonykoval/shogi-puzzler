@@ -113,7 +113,7 @@ object PublicViewerRoutes extends BaseRoutes {
 
   @cask.get("/public-data")
   def publicPuzzles() = {
-    val puzzles = Await.result(GameRepository.getPublicPuzzles(), 10.seconds)
+    val puzzles = Await.result(GameRepository.getAllPublicPuzzles(), 10.seconds)
     
     val jsonArray = puzzles.map { doc =>
       ujson.read(doc.toJson())

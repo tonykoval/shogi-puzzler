@@ -4,6 +4,13 @@ let currentSequenceMoves = [];
 let currentSequenceIndex = -1;
 let autoplayInterval = null;
 let areHintsVisible = false;
+// Sequence starting position (for PV replay from arbitrary SFEN)
+let sequenceStartSfen = null;
+let sequenceStartHands = null;
+let sequenceStartTurn = null;
+// Current dialog context for eval bar updates
+let dialogPos = null;
+let dialogHighlight = null;
 
 // Mapping between backend SFEN role notation and shogiops role notation
 const sfenToShogiopsRole = {
@@ -139,7 +146,10 @@ function formatPuzzle (state) {
         return state.text;
     }
     const data = selectedData[state.id];
-    if (data && (data.sente || data.gote)) {
+    if (data && data.is_custom_puzzle) {
+        // Show custom puzzle with its name
+        return $('<span><i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + state.text + '</span>');
+    } else if (data && (data.sente || data.gote)) {
         return $('<span>' + state.text + ' <small style="color: #888">(' + (data.sente || "?") + ' vs ' + (data.gote || "?") + ')</small></span>');
     }
     return state.text;
@@ -262,14 +272,14 @@ function playBackMove() {
         const wasAnimationEnabled = sg.state.animation.enabled;
         sg.set({ animation: { enabled: false } });
 
-        // Re-render board to initial state
+        // Re-render board to starting position
         sg.set({
             sfen: {
-                board: selected.sfen,
-                hands: selected.hands,
+                board: sequenceStartSfen || selected.sfen,
+                hands: sequenceStartHands !== null ? sequenceStartHands : selected.hands,
             },
-            lastDests: selected.opponentLastMovePosition,
-            turnColor: selected.player
+            lastDests: sequenceStartSfen ? undefined : selected.opponentLastMovePosition,
+            turnColor: sequenceStartTurn || selected.player
         });
         
         // Play moves up to current index without animation
@@ -299,12 +309,11 @@ function applyMove(moveUsi, index, animate = true) {
     }
 
     // Determine whose turn it is based on the move index
-    // index 0, 2, 4... are for the player who starts the puzzle (selected.player)
-    // index 1, 3, 5... are for the opponent
-    const isInitialPlayerTurn = (index % 2 === 0);
-    const playerColor = selected.player;
-    const opponentColor = playerColor === 'sente' ? 'gote' : 'sente';
-    const currentColor = isInitialPlayerTurn ? playerColor : opponentColor;
+    // index 0, 2, 4... are for the starting color (sequenceStartTurn or selected.player)
+    // index 1, 3, 5... are for the opposite color
+    const startColor = sequenceStartTurn || selected.player;
+    const isStartColorTurn = (index % 2 === 0);
+    const currentColor = isStartColorTurn ? startColor : opposite(startColor);
 
     console.log(`[SEQUENCE] Applying move ${index}: ${moveUsi} for ${currentColor} (animate: ${animate})`);
 
@@ -360,28 +369,33 @@ function applyMove(moveUsi, index, animate = true) {
     sg.set({ turnColor: opposite(currentColor) });
 }
 
-function initSequence(usiString) {
+function initSequence(usiString, startingSfen, startingHands, startingTurn) {
     if (!usiString) return;
     currentSequenceMoves = usiString.split(' ');
     currentSequenceIndex = -1;
-    
+
+    // Store starting position (defaults to puzzle start)
+    sequenceStartSfen = startingSfen || selected.sfen;
+    sequenceStartHands = startingHands !== undefined ? startingHands : selected.hands;
+    sequenceStartTurn = startingTurn || selected.player;
+
     isPlayingSequence = true;
     clearShapes();
     stopAutoplay();
-    
-    // Reset board to initial puzzle state
+
+    // Reset board to starting position
     sg.set({
         sfen: {
-            board: selected.sfen,
-            hands: selected.hands,
+            board: sequenceStartSfen,
+            hands: sequenceStartHands,
         },
-        lastDests: selected.opponentLastMovePosition,
-        turnColor: selected.player,
+        lastDests: startingSfen ? undefined : selected.opponentLastMovePosition,
+        turnColor: sequenceStartTurn,
         animation: { enabled: false }
     });
-    
+
     // Reset turn color and movable state to ensure clean start
-    sg.set({ turnColor: selected.player, animation: { enabled: true } });
+    sg.set({ turnColor: sequenceStartTurn, animation: { enabled: true } });
 
     $("#continuation-controls").show();
     updateContinuationControls();
@@ -405,6 +419,33 @@ function playSequence(usiString) {
     setTimeout(() => {
         if (isPlayingSequence) {
             playNextMove(); // Play the first move immediately
+            startAutoplay();
+        }
+    }, 200);
+}
+
+/**
+ * Play engine PV on the board starting from the analyzed SFEN position.
+ * Closes the Swal dialog and uses the existing continuation controls.
+ */
+function playPvOnBoard(pvString, sfen) {
+    if (!pvString || !sfen) return;
+
+    Swal.close();
+
+    // Parse the full SFEN to extract board, turn, hands
+    const parts = sfen.split(' ');
+    const boardSfen = parts[0];
+    const turnChar = parts.length >= 2 ? parts[1] : 'b';
+    const handsSfen = parts.length >= 3 ? parts[2] : '-';
+    const turnColor = turnChar === 'b' ? 'sente' : 'gote';
+
+    // For Shogiground, pass the full SFEN as board (it parses internally)
+    initSequence(pvString, sfen, handsSfen, turnColor);
+
+    setTimeout(() => {
+        if (isPlayingSequence) {
+            playNextMove();
             startAutoplay();
         }
     }, 200);
@@ -473,6 +514,31 @@ $(".lishogi-position").click( function () {
     window.open("https://lishogi.org/analysis/" + lishogiSfen, "_blank");
 });
 
+// Engine analysis handler for dynamically added buttons in Swal dialogs
+$(document).on('click', '.engine-analysis-btn', function() {
+    const sfen = $(this).data('sfen');
+    const playerColor = $(this).data('player');
+    const resultContainer = document.getElementById('engine-result');
+
+    // Disable button and show loading
+    const btn = $(this);
+    btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Analyzing...');
+
+    runEngineAnalysis(sfen, playerColor, resultContainer);
+
+    // Re-enable button after a timeout (will be re-enabled when modal closes anyway)
+    setTimeout(() => {
+        btn.prop('disabled', false).html('<i class="bi bi-cpu me-1"></i>Engine Analysis');
+    }, 5000);
+});
+
+// Play PV on board handler for dynamically added buttons in Swal dialogs
+$(document).on('click', '.play-pv-btn', function() {
+    const pv = $(this).data('pv');
+    const sfen = $(this).data('sfen');
+    playPvOnBoard(pv, sfen);
+});
+
 $(".prev-puzzle").click( function () {
     const currentId = parseInt(games.val());
     if (currentId > 0 && Array.isArray(selectedData)) {
@@ -501,7 +567,10 @@ function createIds(data) {
             let obj = {}
             obj["id"] = index
             let label = value.id
-            if (value.move_number) {
+            if (value.is_custom_puzzle && value.custom_puzzle_name) {
+                // Show custom puzzle name
+                label = value.custom_puzzle_name
+            } else if (value.move_number) {
                 label = "Move " + value.move_number
             } else if (value.ply) {
                 label = "Move " + (value.ply + 1)
@@ -524,11 +593,20 @@ function selectSituation(id, data) {
     $('#show-hints').hide();
     stopAutoplay();
     isPlayingSequence = false;
+    sequenceStartSfen = null;
+    sequenceStartHands = null;
+    sequenceStartTurn = null;
     selected = data[id]
+    console.log("[PUZZLE] Selected puzzle data:", selected);
 
     // Update puzzle info panel
     if (selected) {
-        $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (selected.sente || "?") + " vs " + (selected.gote || "?"));
+        // Show custom puzzle name or player names
+        if (selected.is_custom_puzzle && selected.custom_puzzle_name) {
+            $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + selected.custom_puzzle_name);
+        } else {
+            $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (selected.sente || "?") + " vs " + (selected.gote || "?"));
+        }
         $('#turn-text').text(selected.player === "sente" ? "Sente to play" : "Gote to play");
         
         // Disable "Game" button if no valid URL and no valid hash
@@ -585,8 +663,8 @@ function isMove(engineMove, playerMove, playerPositionMove, returnValue) {
         let result = false
         if (engineMove.drop !== null && engineMove.drop !== undefined) {
             if (playerPositionMove === "DROP") {
-                const engineRole = sfenRoleToShogiopsRole(engineMove.drop.dropMove.pieceRole);
-                result = engineRole === playerMove.piece.role && engineMove.drop.dropMove.destinationSquare === playerMove.key;
+                const engineRole = sfenRoleToShogiopsRole(engineMove.drop.drop.role);
+                result = engineRole === playerMove.piece.role && engineMove.drop.drop.pos === playerMove.key;
             }
         } else {
             if (playerPositionMove === "MOVE") {
@@ -643,32 +721,144 @@ function formatComment(comment) {
     }).join("");
 }
 
+/**
+ * Map CP score to a 0-100% position using a sigmoid curve.
+ * Spreads out the critical -2000..+2000 range, compresses extremes.
+ */
+function cpToPercent(cp) {
+    if (cp >= 30000) return 97;
+    if (cp <= -30000) return 3;
+    return 50 + 50 * (2 / (1 + Math.exp(-cp / 600)) - 1);
+}
+
+/**
+ * Extract numeric score from a move's score object.
+ * Handles both formats:
+ *   Regular puzzles: { cp: 250, moves: null } or { cp: null, moves: 3 }
+ *   Custom puzzles:  { cp: 250 } or { mate: 3 }
+ * Returns { cp, text, isMate } or null.
+ */
+function extractScore(score) {
+    if (!score) return null;
+    // Mate: check both 'moves' (regular) and 'mate' (custom) fields
+    const mateVal = score.moves !== null && score.moves !== undefined ? score.moves
+                  : score.mate !== null && score.mate !== undefined ? score.mate
+                  : null;
+    if (mateVal !== null) {
+        return { cp: mateVal > 0 ? 30000 : -30000, text: `M${mateVal > 0 ? '+' : ''}${mateVal}`, isMate: true };
+    }
+    if (score.cp !== null && score.cp !== undefined) {
+        const cp = score.cp;
+        return { cp, text: cp >= 0 ? `+${cp}` : `${cp}`, isMate: false };
+    }
+    return null;
+}
+
+/**
+ * Build an evaluation bar showing where each move sits on the CP scale.
+ * highlightMove: 0=blunder, 1=best, 2=second, 3=third, null=none
+ * engineScore: optional { kind: 'cp'|'mate', value: N } from engine analysis
+ */
+function buildEvalBar(pos, highlightMove, engineScore) {
+    const items = [];
+
+    // Try move detail score first, then fall back to continuation score (pos.best, pos.second, pos.third)
+    function add(moveDetail, continuation, label, color, id) {
+        const score = (moveDetail && moveDetail.score) ? moveDetail.score
+                    : (continuation && continuation.score) ? continuation.score
+                    : null;
+        const s = extractScore(score);
+        if (!s) return;
+        const isYou = highlightMove === id;
+        items.push({ label: isYou ? label + ' (You)' : label, ...s, color, isYou, pct: cpToPercent(s.cp) });
+    }
+
+    add(pos.best_move, pos.best, '1st', '#28a745', 1);
+    add(pos.second_move, pos.second, '2nd', '#e8a317', 2);
+    add(pos.third_move, pos.third, '3rd', '#17a2b8', 3);
+    add(pos.your_move, null, 'Blunder', '#dc3545', 0);
+
+    // Add engine analysis marker if provided
+    if (engineScore) {
+        const s = extractScore(engineScore.kind === 'mate'
+            ? { moves: engineScore.value }
+            : { cp: engineScore.value });
+        if (s) {
+            items.push({ label: 'Engine', ...s, color: '#fff', isYou: false, isEngine: true, pct: cpToPercent(s.cp) });
+        }
+    }
+
+    if (items.length === 0) return '';
+
+    // Build marker dots on the bar
+    const markers = items.map(m => {
+        const isEngine = m.isEngine;
+        const size = (m.isYou || isEngine) ? 18 : 12;
+        const border = m.isYou ? '2px solid #fff'
+                     : isEngine ? '2px solid #333'
+                     : '1px solid rgba(0,0,0,0.3)';
+        const zIdx = isEngine ? 12 : m.isYou ? 10 : 5;
+        return `<div style="position:absolute;left:${m.pct}%;top:50%;transform:translate(-50%,-50%);z-index:${zIdx};" title="${m.label}: ${m.text}">
+            <div style="width:${size}px;height:${size}px;border-radius:50%;background:${m.color};border:${border};box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>
+        </div>`;
+    }).join('');
+
+    // Build legend items
+    const legend = items.map(m => {
+        const isEngine = m.isEngine;
+        const fw = (m.isYou || isEngine) ? 'bold' : 'normal';
+        const ul = m.isYou ? 'underline' : 'none';
+        const clr = isEngine ? '#fff' : m.color;
+        return `<span style="color:${clr};font-weight:${fw};text-decoration:${ul};white-space:nowrap;">● ${m.label}: ${m.text}</span>`;
+    }).join('<span style="margin:0 4px;color:#555;">|</span>');
+
+    return `<div id="main-eval-bar" style="margin:12px 0 4px 0;">
+        <div style="position:relative;height:28px;border-radius:14px;background:linear-gradient(to right,#5c1a1a 0%,#dc3545 12%,#e8a317 38%,#28a745 62%,#1a5c28 100%);box-shadow:inset 0 1px 3px rgba(0,0,0,0.4);">
+            <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.35);z-index:1;"></div>
+            ${markers}
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.6em;color:#999;margin-top:2px;padding:0 4px;">
+            <span>Losing</span><span>0</span><span>Winning</span>
+        </div>
+        <div style="margin-top:4px;text-align:center;font-size:0.8em;line-height:1.6;">${legend}</div>
+    </div>`;
+}
+
 function fireError(pos) {
     if (isPlayingSequence) return;
+    dialogPos = pos; dialogHighlight = 0;
     const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'error',
         title: 'Failure',
-        html: '<p>You played the bad move!</p> ' +
-            '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        width: 600,
+        html: '<p>You played the bad move!</p>' +
+            buildEvalBar(pos, 0) +
+            '<div>' + formatComment(pos.comment) + '</div>' +
+            getEngineAnalysisButton(pos.sfen, pos.player),
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
 }
 
 function fireWarning(pos) {
     if (isPlayingSequence) return;
+    dialogPos = pos; dialogHighlight = null;
     const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'warning',
         title: 'Warning',
-        html: '<p>You didn\'t played one of the best 3 moves! Please analyze your move.</p>' +
-            '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        width: 600,
+        html: '<p>You didn\'t play one of the best 3 moves! Use Engine Analysis to check your move.</p>' +
+            buildEvalBar(pos, null) +
+            '<div>' + formatComment(pos.comment) + '</div>' +
+            getEngineAnalysisButton(pos.sfen, pos.player),
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
 }
 
 function fireSuccess(pos, num) {
     if (isPlayingSequence) return;
+    dialogPos = pos; dialogHighlight = num;
     const lishogiSfen = pos.sfen.replace(/ /g, '_');
     let msg;
     switch (num) {
@@ -685,10 +875,292 @@ function fireSuccess(pos, num) {
     Swal.fire({
         icon: 'success',
         title: 'Success',
-        html: '<p> ' + msg + '</p> ' +
-            '<div>' + formatComment(pos.comment) + '</div>',
-        footer: '<a href="https://lishogi.org/analysis/' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        width: 600,
+        html: '<p>' + msg + '</p>' +
+            buildEvalBar(pos, num) +
+            '<div>' + formatComment(pos.comment) + '</div>' +
+            getEngineAnalysisButton(pos.sfen, pos.player),
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
     })
+}
+
+/**
+ * Generate the engine analysis button HTML for Swal dialogs
+ */
+function getEngineAnalysisButton(sfen, playerColor) {
+    // Get current board SFEN after player's move
+    let currentSfen = sfen;
+    if (sg && sg.state) {
+        try {
+            // Get board from shogiground state
+            const board = sg.state.pieces;
+            const hands = sg.state.hands;
+            const turn = sg.state.turnColor === 'sente' ? 'b' : 'w';
+            const moveNumber = 1; // Default
+            
+            // Generate SFEN components
+            const boardSfen = generateBoardSfen(board);
+            const handsSfen = generateHandsSfen(hands);
+            
+            currentSfen = `${boardSfen} ${turn} ${handsSfen} ${moveNumber}`;
+        } catch (e) {
+            console.warn('[VIEWER] Could not get current SFEN, using original:', e);
+        }
+    }
+    
+    return `<div class="mt-3">
+        <div class="card">
+            <div class="card-body p-2">
+                <h6 class="card-title mb-2"><i class="bi bi-gear me-1"></i>Engine Settings</h6>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label small mb-1">Depth</label>
+                        <select class="form-select form-select-sm" id="engine-depth">
+                            <option value="5">5 plies</option>
+                            <option value="10" selected>10 plies</option>
+                            <option value="15">15 plies</option>
+                            <option value="20">20 plies</option>
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small mb-1">Time</label>
+                        <select class="form-select form-select-sm" id="engine-time">
+                            <option value="1">1s</option>
+                            <option value="2" selected>2s</option>
+                            <option value="5">5s</option>
+                            <option value="10">10s</option>
+                            <option value="30">30s</option>
+                        </select>
+                    </div>
+                </div>
+                <button class="btn btn-sm btn-warning w-100 mt-2 engine-analysis-btn" data-sfen="${currentSfen}" data-player="${playerColor}">
+                    <i class="bi bi-cpu me-1"></i>Engine Analysis
+                </button>
+            </div>
+        </div>
+        <div id="engine-result" class="mt-2" style="display:none;"></div>
+    </div>`;
+}
+
+/**
+ * Generate board SFEN from shogiground board state
+ */
+function generateBoardSfen(board) {
+    if (!board || typeof board === 'string') {
+        // Board might already be in SFEN format
+        return board || '9/9/9/9/9/9/9/9/9';
+    }
+    
+    // Board is a Map with square keys like '55', '76', etc.
+    const ranks = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'];
+    const files = ['9', '8', '7', '6', '5', '4', '3', '2', '1'];
+    
+    let sfen = '';
+    let emptyCount = 0;
+    
+    for (let i = 0; i < 9; i++) {
+        if (i > 0) sfen += '/';
+
+        for (let j = 0; j < 9; j++) {
+            const file = files[j]; // File (column) - 9,8,7,...,1
+            const rank = ranks[i]; // Rank (row) - a,b,c,...,i
+            const square = file + rank;
+            
+            const piece = board.get(square);
+            
+            if (piece) {
+                if (emptyCount > 0) {
+                    sfen += emptyCount;
+                    emptyCount = 0;
+                }
+                // Convert shogiops role to SFEN format
+                sfen += pieceToSfenRole(piece);
+            } else {
+                emptyCount++;
+            }
+        }
+        
+        if (emptyCount > 0) {
+            sfen += emptyCount;
+            emptyCount = 0;
+        }
+    }
+    
+    return sfen || '9/9/9/9/9/9/9/9/9';
+}
+
+/**
+ * Convert piece to SFEN role
+ */
+function pieceToSfenRole(piece) {
+    const roles = {
+        'king': 'K', 'rook': 'R', 'bishop': 'B', 'gold': 'G',
+        'silver': 'S', 'knight': 'N', 'lance': 'L', 'pawn': 'P',
+        // Shogiops role names
+        'promotedRook': '+R', 'promotedBishop': '+B',
+        'promotedSilver': '+S', 'promotedKnight': '+N',
+        'promotedLance': '+L', 'promotedPawn': '+P',
+        // Shogiground native role names
+        'dragon': '+R', 'horse': '+B', 'tokin': '+P',
+        'promotedsilver': '+S', 'promotedknight': '+N', 'promotedlance': '+L'
+    };
+    
+    let role = roles[piece.role] || piece.role;
+    
+    // Upper case for Sente (Black), lower case for Gote (White)
+    if (piece.color === 'sente' || piece.color === 'gote') {
+        if (piece.color === 'gote') {
+            role = role.toLowerCase();
+        }
+    }
+    
+    return role;
+}
+
+/**
+ * Generate hands SFEN from shogiground hands state
+ */
+function generateHandsSfen(hands) {
+    if (!hands) return '-';
+
+    const roleOrder = ['rook', 'bishop', 'gold', 'silver', 'knight', 'lance', 'pawn'];
+    const roleToSfen = {
+        'rook': 'R', 'bishop': 'B', 'gold': 'G',
+        'silver': 'S', 'knight': 'N', 'lance': 'L', 'pawn': 'P'
+    };
+
+    let senteStr = '';
+    let goteStr = '';
+
+    // handMap is a Map<Color, Map<Role, number>>
+    const handMap = hands.handMap || hands;
+
+    if (handMap instanceof Map) {
+        const senteHand = handMap.get('sente');
+        if (senteHand instanceof Map) {
+            for (const role of roleOrder) {
+                const count = senteHand.get(role) || 0;
+                if (count > 0) {
+                    if (count > 1) senteStr += count;
+                    senteStr += roleToSfen[role];
+                }
+            }
+        }
+
+        const goteHand = handMap.get('gote');
+        if (goteHand instanceof Map) {
+            for (const role of roleOrder) {
+                const count = goteHand.get(role) || 0;
+                if (count > 0) {
+                    if (count > 1) goteStr += count;
+                    goteStr += roleToSfen[role].toLowerCase();
+                }
+            }
+        }
+    }
+
+    const result = senteStr + goteStr;
+    return result || '-';
+}
+
+/**
+ * Run engine analysis and display result
+ */
+function runEngineAnalysis(sfen, playerColor, resultContainer) {
+    const depth = document.getElementById('engine-depth')?.value || 10;
+    const time = document.getElementById('engine-time')?.value || 2;
+    
+    $.ajax({
+        url: '/viewer/analyze',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            sfen: sfen,
+            playerColor: playerColor,
+            depth: parseInt(depth),
+            time: parseInt(time),
+            multiPv: 1
+        }),
+        success: function(response) {
+            if (response.success && response.moves && response.moves.length > 0) {
+                const bestMove = response.moves[0];
+                const score = bestMove.score;
+                const usiMove = bestMove.usi;
+                const resultDepth = bestMove.depth;
+                const timeUsed = time; // Capture the time setting
+                
+                // Format the score display
+                let scoreText = '';
+                let scoreClass = '';
+                if (score.kind === 'mate') {
+                    if (score.value > 0) {
+                        scoreText = `Mate in +${score.value}`;
+                        scoreClass = 'text-success';
+                    } else if (score.value < 0) {
+                        scoreText = `Mated in ${score.value}`;
+                        scoreClass = 'text-danger';
+                    } else {
+                        scoreText = 'Draw';
+                        scoreClass = 'text-warning';
+                    }
+                } else {
+                    const cpValue = score.value;
+                    if (cpValue > 0) {
+                        scoreText = `+${cpValue}`;
+                        scoreClass = 'text-success';
+                    } else if (cpValue < 0) {
+                        scoreText = `${cpValue}`;
+                        scoreClass = 'text-danger';
+                    } else {
+                        scoreText = '0';
+                        scoreClass = 'text-muted';
+                    }
+                }
+                
+                // Update the main eval bar to include engine score marker
+                if (dialogPos) {
+                    const updatedBar = buildEvalBar(dialogPos, dialogHighlight, score);
+                    $('#main-eval-bar').replaceWith(updatedBar);
+                }
+
+                // Build PV display and play button
+                const pvString = bestMove.pv || '';
+                const pvMoves = pvString ? pvString.split(' ') : [];
+                let pvHtml = '';
+                if (pvMoves.length > 0) {
+                    pvHtml = `<div class="mt-1"><small class="text-muted">PV: ${pvMoves.join(' ')}</small></div>`;
+                    pvHtml += `<button class="btn btn-sm btn-outline-success w-100 mt-2 play-pv-btn" data-pv="${pvString}" data-sfen="${sfen}">
+                        <i class="bi bi-play-fill me-1"></i>Play on Board (${pvMoves.length} moves)
+                    </button>`;
+                }
+
+                resultContainer.innerHTML = `
+                    <div class="alert alert-light border mb-0">
+                        <strong><i class="bi bi-cpu me-1"></i>Engine:</strong>
+                        <span class="${scoreClass}" style="font-size: 1.1em; font-weight: bold;">${scoreText}</span>
+                        <small class="text-muted ms-2">(${resultDepth} plies, ${timeUsed}s)</small>
+                        ${pvHtml}
+                    </div>
+                `;
+                resultContainer.style.display = 'block';
+            } else {
+                resultContainer.innerHTML = `
+                    <div class="alert alert-warning">
+                        Analysis failed: ${response.error || 'No moves found'}
+                    </div>
+                `;
+                resultContainer.style.display = 'block';
+            }
+        },
+        error: function(xhr, status, error) {
+            resultContainer.innerHTML = `
+                <div class="alert alert-danger">
+                    Error: ${error}
+                </div>
+            `;
+            resultContainer.style.display = 'block';
+        }
+    });
 }
 
 function fireSave(text) {
@@ -781,7 +1253,10 @@ function resolveMove(pos, r0, r1, r2, r3) {
 }
 
 function generateConfig(pos) {
-    console.log(pos)
+    console.log("[PUZZLE] Position data:", pos);
+    console.log("[PUZZLE] SFEN:", pos.sfen);
+    console.log("[PUZZLE] Hands:", pos.hands);
+    console.log("[PUZZLE] Player:", pos.player);
     return {
         sfen: {
             board: pos.sfen,
@@ -797,7 +1272,39 @@ function generateConfig(pos) {
         },
         droppable: {
             free: false,
-            dests: Shogiops.compat.shogigroundDropDests(Shogiops.sfen.parseSfen("standard", pos.sfen, false).value),
+            dests: (() => {
+                // Build full SFEN with hands for proper drop dests calculation
+                // SFEN format: <board> <turn> <hands> <moveNumber>
+                console.log("[PUZZLE] pos.sfen:", pos.sfen);
+                console.log("[PUZZLE] pos.hands:", pos.hands);
+                console.log("[PUZZLE] pos.player:", pos.player);
+                
+                // Check if pos.sfen already contains the full SFEN or just the board
+                const sfenParts = pos.sfen.split(' ');
+                let fullSfen;
+                
+                if (sfenParts.length >= 3) {
+                    // pos.sfen already contains turn and hands
+                    fullSfen = pos.sfen;
+                } else {
+                    // pos.sfen contains only the board part, we need to add turn and hands
+                    const turnChar = pos.player === 'sente' ? 'b' : 'w';
+                    const handsStr = pos.hands || '-';
+                    fullSfen = `${pos.sfen} ${turnChar} ${handsStr} 1`;
+                }
+                
+                console.log("[PUZZLE] Full SFEN for drop dests:", fullSfen);
+                const parsed = Shogiops.sfen.parseSfen("standard", fullSfen, false);
+                console.log("[PUZZLE] Parsed SFEN:", parsed);
+                if (parsed.isOk) {
+                    const dests = Shogiops.compat.shogigroundDropDests(parsed.value);
+                    console.log("[PUZZLE] Drop dests:", dests);
+                    return dests;
+                } else {
+                    console.error("[PUZZLE] Failed to parse SFEN for drop dests:", parsed.error);
+                    return new Map();
+                }
+            })(),
         },
         promotion: {
             promotesTo: role => {

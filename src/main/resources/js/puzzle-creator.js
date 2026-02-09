@@ -7,6 +7,7 @@ let autoplayInterval = null;
 let initialSfen = null;
 let allSequences = []; // Store all candidate sequences
 let displayedSequenceIndex = 0; // Which sequence is currently displayed
+let selectedCandidateIndices = []; // Checked candidates for viewer (max 3)
 let isAnalyzing = false; // Track if analysis is running
 let arrowsVisible = true; // Track arrow visibility state
 let moveComments = {}; // Store comments for moves: { "candidateIndex_moveIndex": "comment text" }
@@ -21,6 +22,10 @@ function initBoard(sfen = null) {
         },
         orientation: 'sente',
         movable: {
+            free: true,
+            color: 'both'
+        },
+        droppable: {
             free: true,
             color: 'both'
         },
@@ -177,15 +182,43 @@ function loadPuzzle(puzzle, showToast) {
     // Reinitialize board with the puzzle's SFEN
     initBoard(puzzle.sfen);
 
-    // If there's a saved sequence, automatically run analysis to display it with comments
-    if (puzzle.selected_sequence && puzzle.selected_sequence.length > 0) {
-        console.log('[PUZZLE-CREATOR] Loaded puzzle with saved sequence, running analysis...');
-        // Store initial SFEN for sequence playback
+    // Restore analysis data if available (no engine call needed)
+    if (puzzle.analysis_data && puzzle.analysis_data.length > 0) {
+        console.log('[PUZZLE-CREATOR] Restoring saved analysis data...');
+        try {
+            allSequences = JSON.parse(puzzle.analysis_data);
+            displayedSequenceIndex = 0;
+            initialSfen = puzzle.sfen || '';
+            // Restore selected candidate indices or default to first N
+            if (puzzle.selected_candidates && Array.isArray(puzzle.selected_candidates)) {
+                selectedCandidateIndices = puzzle.selected_candidates.map(v => typeof v === 'number' ? v : parseInt(v));
+            } else {
+                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, allSequences.length));
+            }
+            // Display the sequence directly — arrows, playback controls, comments
+            setTimeout(() => {
+                displaySequence(allSequences[displayedSequenceIndex]);
+            }, 100);
+        } catch (e) {
+            console.error('[PUZZLE-CREATOR] Failed to parse analysis_data:', e);
+        }
+    } else if (puzzle.selected_sequence && puzzle.selected_sequence.length > 0) {
+        // Backward compat: build minimal sequence objects from USI strings (no scores)
+        console.log('[PUZZLE-CREATOR] Restoring from selected_sequence (no scores)...');
         initialSfen = puzzle.sfen || '';
-        // Auto-run analysis to display the sequence with comments
+        const minimalSequence = puzzle.selected_sequence.map((usi, index) => ({
+            moveNum: index + 1,
+            usi: usi,
+            score: null,
+            depth: 0,
+            sfenBefore: '',
+            pv: ''
+        }));
+        allSequences = [minimalSequence];
+        displayedSequenceIndex = 0;
         setTimeout(() => {
-            analyzeSequence();
-        }, 500);
+            displaySequence(allSequences[displayedSequenceIndex]);
+        }, 100);
     }
 
     if (showToast) {
@@ -227,10 +260,16 @@ function savePuzzle() {
         data.id = currentPuzzleId;
     }
 
-    // Include selected sequence if available
+    // Include selected sequence and full analysis data if available
     if (allSequences.length > 0 && displayedSequenceIndex >= 0) {
+        data.analysisData = JSON.stringify(allSequences);
+        // Keep selectedSequence for backward compat
         const selectedSeq = allSequences[displayedSequenceIndex];
         data.selectedSequence = selectedSeq.map(move => move.usi);
+        // Include checked candidate indices for viewer
+        if (selectedCandidateIndices.length > 0) {
+            data.selectedCandidates = selectedCandidateIndices;
+        }
     }
 
     $.ajax({
@@ -325,6 +364,9 @@ function analyzePosition(multiPv = 3) {
         }
     });
     
+    const depth = parseInt($('#analysis-depth').val()) || 15;
+    const time = parseInt($('#analysis-time').val()) || 0;
+
     $.ajax({
         url: '/puzzle-creator/analyze',
         method: 'POST',
@@ -332,7 +374,8 @@ function analyzePosition(multiPv = 3) {
         data: JSON.stringify({
             sfen: sfen,
             multiPv: multiPv,
-            depth: 15
+            depth: depth,
+            time: time > 0 ? time * 1000 : undefined
         }),
         success: function(response) {
             Swal.close();
@@ -379,28 +422,33 @@ function analyzeSequence() {
     }
     
     // Get analysis parameters
-    const depth = parseInt($('#analysis-depth').val()) || 12;
+    const depth = parseInt($('#analysis-depth').val()) || 15;
+    const time = parseInt($('#analysis-time').val()) || 0;
     const numMoves = parseInt($('#analysis-moves').val()) || 3;
     const numCandidates = parseInt($('#analysis-candidates').val()) || 1;
-    
+
     // Store initial SFEN for sequence playback
     initialSfen = sfen;
-    
+
     // Set analyzing state
     isAnalyzing = true;
     $('#analyze-sequence').prop('disabled', true);
     $('#stop-analysis').show();
-    
+
+    // Build description
+    let desc = `depth ${depth}`;
+    if (time > 0) desc += `, ${time}s/move`;
+
     // Show loading indicator
     Swal.fire({
         title: 'Analyzing...',
-        text: `Engine is calculating ${numCandidates} candidate(s) with ${numMoves} moves each`,
+        text: `Engine: ${numCandidates} candidate(s), ${numMoves} moves each (${desc})`,
         allowOutsideClick: false,
         didOpen: () => {
             Swal.showLoading();
         }
     });
-    
+
     $.ajax({
         url: '/puzzle-creator/analyze-sequence',
         method: 'POST',
@@ -408,7 +456,9 @@ function analyzeSequence() {
         data: JSON.stringify({
             sfen: sfen,
             numMoves: numMoves,
-            multiPv: numCandidates
+            multiPv: numCandidates,
+            depth: depth,
+            time: time
         }),
         success: function(response) {
             Swal.close();
@@ -424,7 +474,9 @@ function analyzeSequence() {
                 // Store all sequences
                 allSequences = response.sequences;
                 displayedSequenceIndex = 0;
-                
+                // Auto-select first N candidates (max 3) for the viewer
+                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, allSequences.length));
+
                 console.log('[PUZZLE-CREATOR] Found', allSequences.length, 'candidate sequences');
                 displaySequence(allSequences[displayedSequenceIndex]);
             } else {
@@ -562,47 +614,44 @@ function displaySequence(sequence) {
     // Add candidate selector if there are multiple sequences
     if (allSequences.length > 1) {
         sequenceHtml += '<div class="mb-2">';
-        sequenceHtml += '<label class="form-label text-light">Candidate Sequence:</label>';
-        sequenceHtml += '<select id="sequence-selector" class="form-select form-select-sm">';
-        
+        sequenceHtml += '<label class="form-label text-light">Candidates <small class="text-muted">(check up to 3 for viewer)</small>:</label>';
+        sequenceHtml += '<div id="candidate-list" class="list-group list-group-flush">';
+
         allSequences.forEach((seq, index) => {
-            const selected = index === displayedSequenceIndex ? 'selected' : '';
+            const isActive = index === displayedSequenceIndex;
+            const isChecked = selectedCandidateIndices.includes(index);
+            const atLimit = selectedCandidateIndices.length >= 3 && !isChecked;
             const score = formatSequenceScore(seq[0].score);
-            sequenceHtml += `<option value="${index}" ${selected}>Candidate ${index + 1}: ${seq[0].usi} ${score}</option>`;
+            sequenceHtml += `<div class="list-group-item list-group-item-action d-flex align-items-center p-1 ${isActive ? 'active' : ''}" data-index="${index}" style="background:${isActive ? '#3a3530' : '#2e2a24'};border-color:#444;cursor:pointer;">`;
+            sequenceHtml += `<input type="checkbox" class="form-check-input me-2 candidate-checkbox" data-index="${index}" ${isChecked ? 'checked' : ''} ${atLimit ? 'disabled' : ''} style="cursor:pointer;">`;
+            sequenceHtml += `<span class="candidate-label text-light small flex-grow-1">${index + 1}. ${seq[0].usi} ${score}</span>`;
+            sequenceHtml += `</div>`;
         });
-        
-        sequenceHtml += '</select>';
+
+        sequenceHtml += '</div>';
         sequenceHtml += '</div>';
     }
     
     sequenceHtml += '<div class="sequence-moves mb-2">';
     
-    sequence.forEach((move, index) => {
-        const score = formatSequenceScore(move.score);
-        // Only show comment for the first move (candidate move) - index 0
-        const isCandidateMove = index === 0;
-        const commentKey = `${displayedSequenceIndex}_${index}`;
-        const defaultComment = score; // Pre-fill with CP score
-        const savedComment = moveComments[commentKey];
-        const displayComment = (savedComment !== undefined && savedComment !== '') ? savedComment : defaultComment;
-        
-        console.log(`[PUZZLE-CREATOR] Move ${index}, commentKey: ${commentKey}, savedComment:`, savedComment, 'displayComment:', displayComment);
-        
-        sequenceHtml += `<div class="sequence-move mb-2 p-2 bg-dark rounded" data-index="${index}" data-comment-key="${commentKey}">`;
-        sequenceHtml += `<div class="d-flex justify-content-between align-items-center">`;
-        sequenceHtml += `<div><strong>${move.moveNum}.</strong> ${move.usi}</div>`;
-        if (isCandidateMove) {
-            sequenceHtml += `<div class="btn-group btn-group-sm">`;
-            sequenceHtml += `<button class="btn btn-outline-info btn-sm edit-comment-btn" data-comment-key="${commentKey}" title="Edit comment"><i class="bi bi-chat-text"></i></button>`;
-            sequenceHtml += `<button class="btn btn-outline-danger btn-sm delete-comment-btn" data-comment-key="${commentKey}" title="Delete comment"><i class="bi bi-trash"></i></button>`;
-            sequenceHtml += `</div>`;
-        }
-        sequenceHtml += `</div>`;
-        if (isCandidateMove) {
-            sequenceHtml += `<div class="move-comment-display mt-1 small text-info" id="comment-display-${commentKey}">${displayComment}</div>`;
-        }
-        sequenceHtml += `</div>`;
-    });
+    // Only show the candidate move (first move) with its comment
+    const commentKey = `${displayedSequenceIndex}_0`;
+    const defaultComment = sequence.map(m => {
+        const s = formatSequenceScore(m.score);
+        return s ? `${m.usi} (${s})` : m.usi;
+    }).join(' -> ');
+    const savedComment = moveComments[commentKey];
+    const displayComment = (savedComment !== undefined && savedComment !== '') ? savedComment : defaultComment;
+
+    sequenceHtml += `<div class="sequence-move mb-2 p-2 bg-dark rounded" data-index="0" data-comment-key="${commentKey}">`;
+    sequenceHtml += `<div class="d-flex justify-content-between align-items-center">`;
+    sequenceHtml += `<div class="move-comment-display small text-info flex-grow-1 me-2" id="comment-display-${commentKey}">${displayComment}</div>`;
+    sequenceHtml += `<div class="btn-group btn-group-sm flex-shrink-0">`;
+    sequenceHtml += `<button class="btn btn-outline-info btn-sm edit-comment-btn" data-comment-key="${commentKey}" title="Edit comment"><i class="bi bi-chat-text"></i></button>`;
+    sequenceHtml += `<button class="btn btn-outline-danger btn-sm delete-comment-btn" data-comment-key="${commentKey}" title="Delete comment"><i class="bi bi-trash"></i></button>`;
+    sequenceHtml += `</div>`;
+    sequenceHtml += `</div>`;
+    sequenceHtml += `</div>`;
     
     sequenceHtml += '</div>';
     
@@ -640,13 +689,34 @@ function displaySequence(sequence) {
     // Initialize sequence controls
     initSequenceControls();
     
-    // Add sequence selector handler if there are multiple sequences
+    // Add candidate list handlers if there are multiple sequences
     if (allSequences.length > 1) {
-        $('#sequence-selector').off('change').on('change', function() {
-            const selectedIndex = parseInt($(this).val());
-            displayedSequenceIndex = selectedIndex;
-            currentSequenceIndex = selectedIndex;
-            displaySequence(allSequences[selectedIndex]);
+        // Row click → switch preview
+        $('#candidate-list .list-group-item').off('click').on('click', function(e) {
+            if ($(e.target).is('.candidate-checkbox')) return; // let checkbox handler deal with it
+            const idx = parseInt($(this).data('index'));
+            displayedSequenceIndex = idx;
+            displaySequence(allSequences[idx]);
+        });
+
+        // Checkbox change → toggle candidate selection
+        $('#candidate-list .candidate-checkbox').off('change').on('change', function(e) {
+            e.stopPropagation();
+            const idx = parseInt($(this).data('index'));
+            if ($(this).is(':checked')) {
+                if (!selectedCandidateIndices.includes(idx)) {
+                    selectedCandidateIndices.push(idx);
+                }
+            } else {
+                selectedCandidateIndices = selectedCandidateIndices.filter(i => i !== idx);
+            }
+            // Enforce max 3: disable unchecked boxes when limit reached
+            const atLimit = selectedCandidateIndices.length >= 3;
+            $('#candidate-list .candidate-checkbox').each(function() {
+                if (!$(this).is(':checked')) {
+                    $(this).prop('disabled', atLimit);
+                }
+            });
         });
     }
 }
@@ -714,11 +784,11 @@ function editMoveComment(commentKey) {
     const currentComment = moveComments[commentKey] || '';
     const displayEl = $(`#comment-display-${commentKey}`);
     const currentText = displayEl.text();
-    
+
     Swal.fire({
         title: 'Edit Move Comment',
         input: 'textarea',
-        inputValue: currentComment,
+        inputValue: currentComment || currentText,
         inputPlaceholder: 'Enter comment for this move...',
         showCancelButton: true,
         confirmButtonText: 'Save',

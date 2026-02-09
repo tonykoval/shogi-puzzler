@@ -30,6 +30,11 @@ object MongoDBConnection {
     org.mongodb.scala.model.IndexOptions().unique(true)
   ).toFuture().foreach(_ => println("[DB] Unique index on kif_hash created"))(scala.concurrent.ExecutionContext.global)
 
+  // Create index on game_kif_hash for puzzles collection
+  puzzlesCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("game_kif_hash")
+  ).toFuture().foreach(_ => println("[DB] Index on game_kif_hash for puzzles created"))(scala.concurrent.ExecutionContext.global)
+
   // Create unique index on image_data for training collections
   trainingPiecesCollection.createIndex(
     org.mongodb.scala.model.Indexes.ascending("image_data"),
