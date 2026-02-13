@@ -2,9 +2,10 @@ package shogi.puzzler.maintenance.routes
 
 import scalatags.Text.all._
 import shogi.Color
-import shogi.puzzler.db.{AppSettings, GameRepository, SettingsRepository}
+import shogi.puzzler.db.{AppSettings, GameRepository, CustomPuzzleRepository, SettingsRepository}
 import shogi.puzzler.domain.{CpScore, MateScore, PovScore, Score}
 import shogi.puzzler.engine.{EngineManager, Limit}
+import shogi.puzzler.analysis.{AnalysisService, SfenUtils}
 import shogi.puzzler.maintenance.routes.MaintenanceRoutes.getEngineManager
 import shogi.puzzler.ui.Components
 
@@ -16,13 +17,33 @@ object PuzzleCreatorRoutes extends BaseRoutes {
   import org.mongodb.scala.bson.collection.immutable.{Document => BsonDocument}
 
   @cask.get("/puzzle-creator")
-  def puzzleCreatorList(request: cask.Request) = {
+  def puzzleCreatorList(game: Option[String] = None, status: Option[String] = None, request: cask.Request) = {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-      val puzzles = Await.result(GameRepository.getCustomPuzzles(email), 10.seconds)
+      val puzzles = game match {
+        case Some(hash) if hash.nonEmpty =>
+          Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+        case _ =>
+          status match {
+            case Some("review") =>
+              Await.result(CustomPuzzleRepository.getCustomPuzzlesByStatus(email, "review"), 10.seconds)
+            case Some("accepted") =>
+              Await.result(CustomPuzzleRepository.getAcceptedCustomPuzzles(email), 10.seconds)
+            case _ =>
+              Await.result(CustomPuzzleRepository.getCustomPuzzles(email), 10.seconds)
+          }
+      }
+      val gameInfo = game.filter(_.nonEmpty).flatMap { hash =>
+        Await.result(GameRepository.getGameByHash(hash), 10.seconds)
+      }
+      // Count review puzzles for badge
+      val reviewCount = game match {
+        case Some(_) => 0L
+        case _ => Await.result(CustomPuzzleRepository.getCustomPuzzlesByStatus(email, "review"), 10.seconds).size.toLong
+      }
       cask.Response(
-        renderPuzzleListPage(userEmail, settings, puzzles).render,
+        renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, status, reviewCount).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -45,7 +66,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-      val puzzle = Await.result(GameRepository.getCustomPuzzle(id, email), 10.seconds)
+      val puzzle = Await.result(CustomPuzzleRepository.getCustomPuzzle(id, email), 10.seconds)
       puzzle match {
         case Some(doc) =>
           cask.Response(
@@ -58,9 +79,9 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     }
   }
 
-  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument]) = {
+  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument], gameFilter: Option[String] = None, gameInfo: Option[org.mongodb.scala.Document] = None, statusFilter: Option[String] = None, reviewCount: Long = 0) = {
     Components.layout(
-      "Puzzle Creator",
+      "Puzzle Editor",
       userEmail,
       settings,
       appVersion,
@@ -182,14 +203,66 @@ object PuzzleCreatorRoutes extends BaseRoutes {
           .lishogi-link:hover {
             text-decoration: underline;
           }
+          .badge-review {
+            background: #dc3545;
+            color: #fff;
+            font-size: 0.75em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            margin-left: 8px;
+          }
+          .filter-tabs .nav-link {
+            color: #aaa;
+          }
+          .filter-tabs .nav-link.active {
+            color: #fff;
+            background: #444;
+            border-color: #555;
+          }
+          .filter-tabs .nav-link:hover:not(.active) {
+            color: #ddd;
+            border-color: #555;
+          }
         """).render)
       )
     )(
       div(cls := "mt-4")(
+        gameFilter.filter(_.nonEmpty).map { _ =>
+          div(cls := "mb-3")(
+            a(href := "/my-games", cls := "btn btn-outline-secondary btn-sm")(
+              i(cls := "bi bi-arrow-left me-1"), "Back to My Games"
+            )
+          ): Frag
+        }.getOrElse(frag()),
+        gameInfo.map { doc =>
+          val sente = doc.get("sente").map(_.asString().getValue).getOrElse("Unknown")
+          val gote = doc.get("gote").map(_.asString().getValue).getOrElse("Unknown")
+          val date = doc.get("date").map(_.asString().getValue).getOrElse("")
+          div(cls := "alert alert-secondary")(
+            h5(cls := "mb-1")(s"$sente vs $gote"),
+            if (date.nonEmpty) small(cls := "text-muted")(date) else ()
+          ): Frag
+        }.getOrElse(frag()),
         div(cls := "d-flex justify-content-between align-items-center mb-4")(
-          h2("Puzzle Creator"),
+          h2("Puzzle Editor"),
           a(href := "/puzzle-creator/new", cls := "btn btn-success")(i(cls := "bi bi-plus-lg me-2"), "New Puzzle")
         ),
+        if (gameFilter.forall(_.isEmpty)) {
+          tag("ul")(cls := "nav nav-tabs filter-tabs mb-3")(
+            tag("li")(cls := "nav-item")(
+              a(cls := s"nav-link${if (statusFilter.isEmpty) " active" else ""}", href := "/puzzle-creator")("All")
+            ),
+            tag("li")(cls := "nav-item")(
+              a(cls := s"nav-link${if (statusFilter.contains("review")) " active" else ""}", href := "/puzzle-creator?status=review")(
+                "Needs Review",
+                if (reviewCount > 0) tag("span")(cls := "badge bg-danger ms-1")(reviewCount.toString) else ()
+              )
+            ),
+            tag("li")(cls := "nav-item")(
+              a(cls := s"nav-link${if (statusFilter.contains("accepted")) " active" else ""}", href := "/puzzle-creator?status=accepted")("Accepted")
+            )
+          ): Frag
+        } else frag(),
         if (puzzles.isEmpty) {
           div(cls := "alert alert-info")("No puzzles created yet. Click \"New Puzzle\" to get started!")
         } else {
@@ -200,6 +273,8 @@ object PuzzleCreatorRoutes extends BaseRoutes {
               val sfen = doc.getString("sfen")
               val puzzleComments = doc.getString("comments")
               val isPublic = doc.getBoolean("is_public", false)
+              val puzzleStatus = doc.get("status").map(_.asString().getValue).getOrElse("accepted")
+              val isReview = puzzleStatus == "review"
               val createdAt = doc.getLong("created_at")
               val dateStr = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(createdAt))
 
@@ -211,6 +286,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                   div(
                     div(
                       tag("span")(cls := "puzzle-card-name")(puzzleName),
+                      if (isReview) tag("span")(cls := "badge-review")("Needs Review") else (),
                       if (isPublic) tag("span")(cls := "badge-public")("Public") else ()
                     ),
                     div(cls := "puzzle-card-date")(dateStr),
@@ -263,7 +339,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         meta(charset := "utf-8"),
         meta(name := "viewport", content := "width=device-width,initial-scale=1,viewport-fit=cover"),
         meta(name := "theme-color", content := "#2e2a24"),
-        tag("title")(if (puzzle.isDefined) "Edit Puzzle" else "New Puzzle"),
+        tag("title")(if (puzzle.isDefined) "Puzzle Editor - Edit" else "Puzzle Editor - New"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"),
         link(rel := "stylesheet", href := "/assets/css/shogiground.css"),
         link(rel := "stylesheet", href := "/assets/css/portella.css"),
@@ -326,6 +402,18 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                     )
                   )
                 ),
+                puzzle.filter { doc =>
+                  doc.get("status").exists(_.asString().getValue == "review")
+                }.map { doc =>
+                  val puzzleId = doc.getObjectId("_id").toHexString
+                  div(cls := "row g-2 mb-3")(
+                    div(cls := "col-12")(
+                      button(cls := "btn btn-outline-success w-100", id := "accept-puzzle", attr("data-id") := puzzleId)(
+                        i(cls := "bi bi-check-lg me-2"), "Accept Puzzle"
+                      )
+                    )
+                  ): Frag
+                }.getOrElse(frag()),
                 div(cls := "row g-2 mb-3")(
                   div(cls := "col-6")(
                     button(cls := "btn btn-success w-100", id := "analyze-sequence")(
@@ -373,7 +461,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             div(cls := "puzzle__side")(
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__feedback")(
-                  div(cls := "content")(if (puzzle.isDefined) "Edit your puzzle!" else "Create your custom puzzle!"),
+                  div(cls := "content")(if (puzzle.isDefined) "Edit your puzzle!" else "Create a new puzzle!"),
                   div(id := "turn-text", cls := "badge bg-secondary mb-1")("Sente to move")
                 )
               )
@@ -387,16 +475,41 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         puzzle.map { doc =>
           script(raw(s"window.__puzzleData = ${ujson.write(ujson.read(doc.toJson()))};"))
         }.getOrElse(()),
+        script(raw("""
+          document.addEventListener('DOMContentLoaded', function() {
+            var btn = document.getElementById('accept-puzzle');
+            if (btn) {
+              btn.addEventListener('click', function() {
+                var id = btn.getAttribute('data-id');
+                fetch('/puzzle-creator/accept', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ id: id })
+                })
+                  .then(function(r) { return r.json(); })
+                  .then(function(data) {
+                    if (data.success) window.location.href = '/puzzle-creator';
+                    else alert('Accept failed: ' + (data.error || data.message));
+                  });
+              });
+            }
+          });
+        """)),
         script(src := "/js/puzzle-creator.js")
       )
     )
   }
 
   @cask.get("/puzzle-creator/list")
-  def listCustomPuzzles(request: cask.Request) = {
+  def listCustomPuzzles(game: Option[String] = None, request: cask.Request) = {
     withAuthJson(request, "puzzle-creator") { email =>
-      val puzzles = Await.result(GameRepository.getCustomPuzzles(email), 10.seconds)
-      
+      val puzzles = game match {
+        case Some(hash) if hash.nonEmpty =>
+          Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+        case _ =>
+          Await.result(CustomPuzzleRepository.getCustomPuzzles(email), 10.seconds)
+      }
+
       val jsonArray = puzzles.map { doc =>
         ujson.read(doc.toJson())
       }
@@ -426,14 +539,20 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val selectedCandidates = json.obj.get("selectedCandidates").map { sc =>
         sc.arr.map(_.num.toInt).toSeq
       }
+      val blunderMoves = json.obj.get("blunderMoves").map { bm =>
+        bm.arr.map(_.str).toSeq
+      }
+      val tags = json.obj.get("tags").map { t =>
+        t.arr.map(_.str).toSeq
+      }
       val id = json.obj.get("id").map(_.str)
 
       val result = id match {
         case Some(puzzleId) =>
-          Await.result(GameRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates), 10.seconds)
+          Await.result(CustomPuzzleRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(GameRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates), 10.seconds)
+          Await.result(CustomPuzzleRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, tags = tags), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle saved successfully")
       }
       
@@ -446,10 +565,24 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuthJson(request, "puzzle-creator") { email =>
       val json = ujson.read(request.text())
       val id = json("id").str
-      
-      Await.result(GameRepository.deleteCustomPuzzle(id, email), 10.seconds)
+
+      Await.result(CustomPuzzleRepository.deleteCustomPuzzle(id, email), 10.seconds)
       cask.Response(
         ujson.Obj("success" -> true, "message" -> "Puzzle deleted successfully"),
+        headers = Seq("Content-Type" -> "application/json")
+      )
+    }
+  }
+
+  @cask.post("/puzzle-creator/accept")
+  def acceptCustomPuzzle(request: cask.Request) = {
+    withAuthJson(request, "puzzle-creator") { email =>
+      val json = ujson.read(request.text())
+      val id = json("id").str
+
+      Await.result(CustomPuzzleRepository.updateCustomPuzzleStatus(id, email, "accepted"), 10.seconds)
+      cask.Response(
+        ujson.Obj("success" -> true, "message" -> "Puzzle accepted"),
         headers = Seq("Content-Type" -> "application/json")
       )
     }
@@ -467,49 +600,8 @@ object PuzzleCreatorRoutes extends BaseRoutes {
 
       try {
         val engineManager = getEngineManager(settings.enginePath)
-        val limit = Limit(depth = Some(depth), time = time)
-        val results = engineManager.analyze(sfen, limit, multiPv)
-        
-        println(s"[PUZZLE-CREATOR] Engine returned ${results.length} results")
-        results.foreach { result =>
-          println(s"[PUZZLE-CREATOR] Result keys: ${result.keys.mkString(", ")}")
-          println(s"[PUZZLE-CREATOR] Result: $result")
-        }
-        
-        // Determine whose turn it is from the SFEN
-        val colorToMove = sfenTurnToColor(sfen)
-        
-        val movesArray = results.map { result =>
-          // Extract the first move from the PV (Principal Variation)
-          val usiMove = result.get("pv") match {
-            case Some(pvList: List[_]) if pvList.nonEmpty => pvList.head.toString
-            case Some(pvStr: String) if pvStr.nonEmpty => pvStr.split(" ").head
-            case _ => result.get("usi").orElse(result.get("move")).getOrElse("").toString
-          }
-          println(s"[PUZZLE-CREATOR] Extracted USI: $usiMove")
-          
-          // Use PovScore.forPlayer to get score from sente's perspective
-          val povScore = Score.fromEngine(result.get("score"), colorToMove)
-          val senteScore = povScore.forPlayer(Color.Sente)
-          
-          val (scoreKind, scoreValue) = senteScore match {
-            case CpScore(cp) => ("cp", cp)
-            case MateScore(moves) => ("mate", moves)
-            case _ => ("cp", 0)
-          }
-          
-          ujson.Obj(
-            "usi" -> usiMove,
-            "score" -> ujson.Obj("kind" -> scoreKind, "value" -> scoreValue),
-            "depth" -> ujson.Num(result.getOrElse("depth", depth).toString.toInt),
-            "pv" -> (result.get("pv") match {
-              case Some(pvList: List[_]) => pvList.mkString(" ")
-              case Some(pvStr: String) => pvStr
-              case _ => ""
-            })
-          )
-        }
-        
+        val movesArray = AnalysisService.analyzePosition(engineManager, sfen, depth, multiPv, time, Color.Sente)
+
         cask.Response(
           ujson.Obj("success" -> true, "moves" -> ujson.Arr(movesArray: _*)),
           headers = Seq("Content-Type" -> "application/json")
@@ -537,11 +629,10 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       try {
         val engineManager = getEngineManager(settings.enginePath)
 
-        // Analyze with specified depth, time, and number of candidates
         val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(15)
-        val time = json.obj.get("time").map(_.num.toInt).filter(_ > 0) // seconds
-        val sequences = analyzeMoveSequences(engineManager, sfen, numMoves, depth, multiPv, time)
-        
+        val time = json.obj.get("time").map(_.num.toInt).filter(_ > 0)
+        val sequences = AnalysisService.analyzeMoveSequences(engineManager, sfen, numMoves, depth, multiPv, time)
+
         cask.Response(
           ujson.Obj("success" -> true, "sequences" -> ujson.Arr(sequences.map(seq => ujson.Arr(seq: _*)): _*)),
           headers = Seq("Content-Type" -> "application/json")
@@ -554,144 +645,6 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             statusCode = 500
           )
       }
-    }
-  }
-
-  private def analyzeMoveSequences(engineManager: EngineManager, initialSfen: String, numMoves: Int, depth: Int, multiPv: Int, timeSec: Option[Int] = None): Vector[Vector[ujson.Obj]] = {
-    // Build limit with depth and optional time (converted to milliseconds)
-    val limit = Limit(depth = Some(depth), time = timeSec.map(_ * 1000))
-
-    // Get more candidates than requested to filter out duplicates
-    val searchMultiPv = math.max(multiPv * 3, 10) // Get 3x more candidates to find unique ones
-
-    // Get all candidate first moves from the initial position
-    val initialResults = engineManager.analyze(initialSfen, limit, searchMultiPv)
-    
-    // Determine whose turn it is from the initial SFEN
-    val initialColorToMove = sfenTurnToColor(initialSfen)
-    
-    // Extract unique first moves with their scores
-    val uniqueFirstMoves = scala.collection.mutable.LinkedHashMap[String, (String, Score)]()
-    
-    initialResults.foreach { result =>
-      val usiMove = result.get("pv") match {
-        case Some(pvList: List[_]) if pvList.nonEmpty => pvList.head.toString
-        case Some(pvStr: String) if pvStr.nonEmpty => pvStr.split(" ").head
-        case _ => result.get("usi").orElse(result.get("move")).getOrElse("").toString
-      }
-      
-      // Only add if we haven't seen this move yet
-      if (!uniqueFirstMoves.contains(usiMove) && usiMove.nonEmpty) {
-        // Use PovScore.forPlayer to get score from sente's perspective
-        val povScore = Score.fromEngine(result.get("score"), initialColorToMove)
-        val senteScore = povScore.forPlayer(Color.Sente)
-        uniqueFirstMoves(usiMove) = (usiMove, senteScore)
-      }
-    }
-    
-    println(s"[PUZZLE-CREATOR] Found ${uniqueFirstMoves.size} unique first moves out of ${initialResults.length} candidates")
-    
-    // Build sequences for each unique first move (up to multiPv)
-    val sequences = Vector.newBuilder[Vector[ujson.Obj]]
-    var candidateCount = 0
-    
-    uniqueFirstMoves.keys.take(multiPv).foreach { firstMove =>
-      if (candidateCount < multiPv) {
-        val moves = Vector.newBuilder[ujson.Obj]
-        val moveHistory = scala.collection.mutable.ArrayBuffer[String](firstMove)
-        
-        // Add the first move with score already converted to sente's perspective
-        val firstScore = uniqueFirstMoves(firstMove)._2
-        val (firstScoreKind, firstScoreValue) = firstScore match {
-          case CpScore(cp) => ("cp", cp)
-          case MateScore(moves) => ("mate", moves)
-          case _ => ("cp", 0)
-        }
-        
-        moves += ujson.Obj(
-          "moveNum" -> 1,
-          "usi" -> firstMove,
-          "score" -> ujson.Obj("kind" -> firstScoreKind, "value" -> firstScoreValue),
-          "depth" -> depth,
-          "sfenBefore" -> initialSfen,
-          "pv" -> firstMove
-        )
-        
-        // Analyze subsequent moves
-        for (moveNum <- 1 until numMoves) {
-          val results = engineManager.analyzeWithMoves(initialSfen, moveHistory.toSeq, limit, 1)
-          
-          if (results.nonEmpty && results.head.contains("pv")) {
-            val pv = results.head("pv").asInstanceOf[List[String]]
-            
-            if (pv.nonEmpty) {
-              val bestMove = pv.head
-              
-              // Determine whose turn it is for this move (color to move in the analyzed position)
-              val isCurrentSente = isSenteTurn(moveNum + 1, initialSfen)
-              val currentColorToMove = if (isCurrentSente) Color.Sente else Color.Gote
-              
-              // Use PovScore.forPlayer to get score from sente's perspective
-              val povScore = Score.fromEngine(results.head.get("score"), currentColorToMove)
-              val senteScore = povScore.forPlayer(Color.Sente)
-              
-              val (scoreKind, scoreValue) = senteScore match {
-                case CpScore(cp) => ("cp", cp)
-                case MateScore(m) => ("mate", m)
-                case _ => ("cp", 0)
-              }
-              
-              moves += ujson.Obj(
-                "moveNum" -> (moveNum + 1),
-                "usi" -> bestMove,
-                "score" -> ujson.Obj("kind" -> scoreKind, "value" -> scoreValue),
-                "depth" -> depth,
-                "sfenBefore" -> initialSfen,
-                "pv" -> pv.mkString(" ")
-              )
-              
-              moveHistory += bestMove
-            }
-          }
-        }
-        
-        sequences += moves.result()
-        candidateCount += 1
-      }
-    }
-    
-    println(s"[PUZZLE-CREATOR] Generated ${sequences.result().length} sequences with unique first moves")
-    sequences.result()
-  }
-  
-  /**
-   * Convert SFEN turn notation to Color.
-   * SFEN format: board turn hands moves
-   * turn is 'b' for sente (Black) and 'w' for gote (White)
-   */
-  private def sfenTurnToColor(sfen: String): Color = {
-    val parts = sfen.split(" ")
-    if (parts.length >= 2) {
-      if (parts(1) == "b") Color.Sente else Color.Gote
-    } else {
-      Color.Sente // Default to sente (Sente) if SFEN is malformed
-    }
-  }
-  
-  /**
-   * Determine if a move number is sente's turn.
-   * Move numbers are 1-indexed:
-   * - Odd move numbers (1, 3, 5, ...) are sente's turn
-   * - Even move numbers (2, 4, 6, ...) are gote's turn
-   */
-  private def isSenteTurn(moveNum: Int, initialSfen: String): Boolean = {
-    val initialIsSente = sfenTurnToColor(initialSfen) == Color.Sente
-    if (initialIsSente) {
-      // Initial position is sente, so odd moves are sente
-      (moveNum % 2) == 1
-    } else {
-      // Initial position is gote, so even moves are sente
-      (moveNum % 2) == 0
     }
   }
 

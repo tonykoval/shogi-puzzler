@@ -10,6 +10,21 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 object RepertoireRoutes extends BaseRoutes {
 
+  private def withOwnership(id: String, email: String)(f: org.mongodb.scala.Document => cask.Response[ujson.Value]): cask.Response[ujson.Value] = {
+    val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
+    repertoire match {
+      case Some(rep) =>
+        val ownerEmail = rep.get("ownerEmail").map(_.asString().getValue).getOrElse("")
+        if (ownerEmail != email) {
+          cask.Response(ujson.Obj("error" -> "Forbidden"), statusCode = 403)
+        } else {
+          f(rep)
+        }
+      case None =>
+        cask.Response(ujson.Obj("error" -> "Not Found"), statusCode = 404)
+    }
+  }
+
   @cask.get("/repertoire")
   def index(request: cask.Request) = {
     withAuth(request, "repertoire") { email =>
@@ -109,54 +124,58 @@ object RepertoireRoutes extends BaseRoutes {
 
   @cask.post("/repertoire/create")
   def create(request: cask.Request): cask.Response[ujson.Value] = {
-    logger.info(s"Received create repertoire request: ${request.text()}")
-    try {
-      val userEmail = getSessionUserEmail(request)
-      logger.info(s"User email from session: $userEmail")
-      val json = ujson.read(request.text())
-      val name = json("name").str
-      val isAutoReload = json.obj.get("isAutoReload").map(_.bool).getOrElse(false)
-      val reloadThreshold = json.obj.get("reloadThreshold").map(_.num.toInt).getOrElse(200)
-      val reloadColor = json.obj.get("reloadColor").map(_.str)
-      logger.info(s"Creating repertoire with name: $name, isAutoReload: $isAutoReload, reloadThreshold: $reloadThreshold, reloadColor: $reloadColor")
-      val id = Await.result(RepertoireRepository.createRepertoire(name, userEmail, isAutoReload, reloadThreshold, reloadColor), 10.seconds)
-      logger.info(s"Repertoire created with id: $id")
-      cask.Response(ujson.Obj("id" -> id), headers = Seq("Content-Type" -> "application/json"))
-    } catch {
-      case e: Exception =>
-        logger.error("Error creating repertoire", e)
-        cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+    withAuthJson(request, "repertoire") { email =>
+      try {
+        val json = ujson.read(request.text())
+        val name = json("name").str
+        val isAutoReload = json.obj.get("isAutoReload").map(_.bool).getOrElse(false)
+        val reloadThreshold = json.obj.get("reloadThreshold").map(_.num.toInt).getOrElse(200)
+        val reloadColor = json.obj.get("reloadColor").map(_.str)
+        logger.info(s"Creating repertoire with name: $name, isAutoReload: $isAutoReload, reloadThreshold: $reloadThreshold, reloadColor: $reloadColor")
+        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), isAutoReload, reloadThreshold, reloadColor), 10.seconds)
+        logger.info(s"Repertoire created with id: $id")
+        cask.Response(ujson.Obj("id" -> id), headers = Seq("Content-Type" -> "application/json"))
+      } catch {
+        case e: Exception =>
+          logger.error("Error creating repertoire", e)
+          cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
     }
   }
 
   @cask.post("/repertoire/delete")
-  def delete(request: cask.Request) = {
-    val id = ujson.read(request.text())("id").str
-    Await.result(RepertoireRepository.deleteRepertoire(id), 10.seconds)
-    ujson.Obj("success" -> true)
+  def delete(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      val id = ujson.read(request.text())("id").str
+      withOwnership(id, email) { _ =>
+        Await.result(RepertoireRepository.deleteRepertoire(id), 10.seconds)
+        cask.Response(ujson.Obj("success" -> true))
+      }
+    }
   }
 
   @cask.post("/repertoire/reload")
   def reload(request: cask.Request): cask.Response[ujson.Value] = {
-    val id = ujson.read(request.text())("id").str
-    val userEmail = getSessionUserEmail(request)
-    
-    try {
-      val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
-      val isAutoReload = repertoire.flatMap(_.get("isAutoReload")).exists(_.asBoolean().getValue)
-      
-      if (!isAutoReload) {
-        cask.Response(ujson.Obj("error" -> "Tento repertoár nie je určený na automatické načítanie hier."), statusCode = 400)
-      } else {
-        val reloadThreshold = repertoire.flatMap(_.get("reloadThreshold")).map(_.asInt32().getValue).getOrElse(200)
-        val reloadColor = repertoire.flatMap(_.get("reloadColor")).map(_.asString().getValue)
-        val result = Await.result(performReload(id, userEmail, reloadThreshold, reloadColor), 5.minutes)
-        cask.Response(ujson.Obj("success" -> true, "processedGames" -> result), headers = Seq("Content-Type" -> "application/json"))
+    withAuthJson(request, "repertoire") { email =>
+      val id = ujson.read(request.text())("id").str
+      withOwnership(id, email) { rep =>
+        try {
+          val isAutoReload = rep.get("isAutoReload").exists(_.asBoolean().getValue)
+
+          if (!isAutoReload) {
+            cask.Response(ujson.Obj("error" -> "This repertoire is not configured for auto-reload."), statusCode = 400)
+          } else {
+            val reloadThreshold = rep.get("reloadThreshold").map(_.asInt32().getValue).getOrElse(200)
+            val reloadColor = rep.get("reloadColor").map(_.asString().getValue)
+            val result = Await.result(performReload(id, Some(email), reloadThreshold, reloadColor), 5.minutes)
+            cask.Response(ujson.Obj("success" -> true, "processedGames" -> result), headers = Seq("Content-Type" -> "application/json"))
+          }
+        } catch {
+          case e: Exception =>
+            logger.error(s"Error reloading repertoire $id", e)
+            cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+        }
       }
-    } catch {
-      case e: Exception =>
-        logger.error(s"Error reloading repertoire $id", e)
-        cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
     }
   }
 
@@ -173,81 +192,84 @@ object RepertoireRoutes extends BaseRoutes {
       
       _ = logger.info(s"Starting reload for repertoire $repertoireId, found ${analyzedGames.size} analyzed games")
       
-      processedCount <- scala.concurrent.Future.sequence(analyzedGames.map { gameDoc =>
-        val kif = gameDoc.getString("kif")
-        val kifHash = gameDoc.getString("kif_hash")
-        val scores: Seq[Int] = gameDoc.get("scores") match {
-          case Some(bsonValue) if bsonValue.isArray => 
-            bsonValue.asArray().asScala.map(_.asInt32().getValue).toSeq
-          case _ => Seq.empty
-        }
-        
-        if (scores.isEmpty) {
-          scala.concurrent.Future.successful(0)
-        } else {
-          try {
-            val parsedGame = GameLoader.parseKif(kif)
-            val playerColor = parsedGame.playerColorInGame
-            
-            val shouldProcess = reloadColor match {
-              case Some("sente") => playerColor == Color.Sente
-              case Some("gote") => playerColor == Color.Gote
-              case _ => true
-            }
+      processedCount <- analyzedGames.foldLeft(scala.concurrent.Future.successful(0)) { (accFut, gameDoc) =>
+        accFut.flatMap { acc =>
+          val kif = gameDoc.getString("kif")
+          val kifHash = gameDoc.getString("kif_hash")
+          val scores: Seq[Int] = gameDoc.get("scores") match {
+            case Some(bsonValue) if bsonValue.isArray =>
+              bsonValue.asArray().asScala.map(_.asInt32().getValue).toSeq
+            case _ => Seq.empty
+          }
 
-            if (!shouldProcess) {
-              scala.concurrent.Future.successful(0)
-            } else {
-              val sente = gameDoc.getString("sente")
-              val gote = gameDoc.getString("gote")
-              val date = gameDoc.getString("date")
-              val gameName = s"$sente vs $gote ($date)"
+          if (scores.isEmpty) {
+            scala.concurrent.Future.successful(acc)
+          } else {
+            try {
+              val parsedGame = GameLoader.parseKif(kif)
+              val playerColor = parsedGame.playerColorInGame
 
-              val positions = parsedGame.allPositions // Seq[(Vector[Usi], Sfen)]
-              
-              val movesToAdd = scala.collection.mutable.Buffer[(String, String, String, String, Boolean)]() // (parentSfen, usi, nextSfen, comment, isPuzzle)
-              
-              var stop = false
-              for (i <- 0 until positions.size if !stop) {
-                val (usis, sfen) = positions(i)
-                if (usis.isEmpty) {
-                   // skip start pos if it somehow ended up in allPositions as first element
-                } else {
-                  val usi = usis.last.usi
-                  
-                  val scoreBefore = if (i == 0) 0 else scores.lift(i-1).getOrElse(0)
-                  val scoreAfter = scores.lift(i).getOrElse(0)
-                  
-                  val moveColor = if ((i + 1) % 2 != 0) Color.Sente else Color.Gote
-                  
-                  var isPuzzle = false
-                  if (moveColor == playerColor) {
-                    val diff = if (playerColor == Color.Sente) scoreAfter - scoreBefore else scoreBefore - scoreAfter
-                    
-                    if (diff < -threshold) { 
-                      stop = true
-                      isPuzzle = true
+              val shouldProcess = reloadColor match {
+                case Some("sente") => playerColor == Color.Sente
+                case Some("gote") => playerColor == Color.Gote
+                case _ => true
+              }
+
+              if (!shouldProcess) {
+                scala.concurrent.Future.successful(acc)
+              } else {
+                val sente = gameDoc.getString("sente")
+                val gote = gameDoc.getString("gote")
+                val date = gameDoc.getString("date")
+                val gameName = s"$sente vs $gote ($date)"
+
+                val positions = parsedGame.allPositions // Seq[(Vector[Usi], Sfen)]
+
+                val movesToAdd = scala.collection.mutable.Buffer[(String, String, String, String, Boolean)]() // (parentSfen, usi, nextSfen, comment, isPuzzle)
+
+                var stop = false
+                for (i <- 0 until positions.size if !stop) {
+                  val (usis, sfen) = positions(i)
+                  if (usis.isEmpty) {
+                    // skip start pos
+                  } else {
+                    val usi = usis.last.usi
+
+                    val scoreBefore = if (i == 0) 0 else scores.lift(i - 1).getOrElse(0)
+                    val scoreAfter = scores.lift(i).getOrElse(0)
+
+                    // Derive move color from SFEN: if next turn is "w" (gote), the move was by Sente
+                    val moveColor = if (sfen.value.split(" ")(1) == "w") Color.Sente else Color.Gote
+
+                    var isPuzzle = false
+                    if (moveColor == playerColor) {
+                      val diff = if (playerColor == Color.Sente) scoreAfter - scoreBefore else scoreBefore - scoreAfter
+
+                      if (diff < -threshold) {
+                        stop = true
+                        isPuzzle = true
+                      }
+                    }
+
+                    if (!stop || isPuzzle) {
+                      val parentSfen = if (i == 0) shogi.variant.Standard.initialSfen.value else positions(i - 1)._2.value
+                      val evalStr = if (scoreAfter >= 0) s"+$scoreAfter" else s"$scoreAfter"
+                      val comment = s"$gameName [eval: $evalStr]"
+                      movesToAdd += ((parentSfen, usi, sfen.value, comment, isPuzzle))
                     }
                   }
-                  
-                  if (!stop || isPuzzle) {
-                    val parentSfen = if (i == 0) shogi.variant.Standard.initialSfen.value else positions(i-1)._2.value
-                    val evalStr = if (scoreAfter >= 0) s"+$scoreAfter" else s"$scoreAfter"
-                    val comment = s"$gameName [eval: $evalStr]"
-                    movesToAdd += ((parentSfen, usi, sfen.value, comment, isPuzzle))
-                  }
                 }
+
+                addMovesSequentially(repertoireId, movesToAdd.toSeq).map(_ => acc + 1)
               }
-              
-              addMovesSequentially(repertoireId, movesToAdd.toSeq).map(_ => 1)
+            } catch {
+              case e: Exception =>
+                logger.error(s"Error processing game $kifHash during reload", e)
+                scala.concurrent.Future.successful(acc)
             }
-          } catch {
-            case e: Exception => 
-              logger.error(s"Error processing game $kifHash during reload", e)
-              scala.concurrent.Future.successful(0)
           }
         }
-      }).map(_.sum)
+      }
     } yield processedCount
   }
 
@@ -267,13 +289,18 @@ object RepertoireRoutes extends BaseRoutes {
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
       val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
-      
+
       repertoire match {
         case Some(rep) =>
-          cask.Response(
-            renderRepertoireEditor(userEmail, settings, rep).render,
-            headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-          )
+          val ownerEmail = rep.get("ownerEmail").map(_.asString().getValue).getOrElse("")
+          if (ownerEmail != email) {
+            cask.Response("Forbidden", statusCode = 403)
+          } else {
+            cask.Response(
+              renderRepertoireEditor(userEmail, settings, rep).render,
+              headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+            )
+          }
         case None => cask.Response("Not Found", statusCode = 404)
       }
     }
@@ -404,101 +431,107 @@ object RepertoireRoutes extends BaseRoutes {
   }
 
   @cask.get("/repertoire/:id/json")
-  def getRepertoireJson(id: String, request: cask.Request) = {
-    logger.info(s"Fetching repertoire JSON for id: $id")
-    val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
-    repertoire match {
-      case Some(rep) =>
+  def getRepertoireJson(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { rep =>
         logger.info(s"Found repertoire: ${rep.getString("name")}")
         cask.Response(
           ujson.read(rep.toJson()),
           headers = Seq("Content-Type" -> "application/json")
         )
-      case None => 
-        logger.warn(s"Repertoire not found: $id")
-        cask.Response(ujson.Obj("error" -> "Not Found"), statusCode = 404)
+      }
     }
   }
 
   @cask.post("/repertoire/:id/move")
-  def addMove(id: String, request: cask.Request) = {
-    logger.info(s"Adding move to repertoire $id: ${request.text()}")
-    val json = ujson.read(request.text())
-    val parentSfen = json("parentSfen").str
-    val usi = json("usi").str
-    val nextSfen = json("nextSfen").str
-    val comment = json.obj.get("comment").map(_.str)
-    val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
-    
-    Await.result(RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, isPuzzle), 10.seconds)
-    logger.info(s"Move $usi added successfully")
-    ujson.Obj("success" -> true)
+  def addMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val parentSfen = json("parentSfen").str
+        val usi = json("usi").str
+        val nextSfen = json("nextSfen").str
+        val comment = json.obj.get("comment").map(_.str)
+        val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
+
+        Await.result(RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, isPuzzle), 10.seconds)
+        logger.info(s"Move $usi added successfully")
+        cask.Response(ujson.Obj("success" -> true))
+      }
+    }
   }
 
   @cask.post("/repertoire/:id/move/update")
-  def updateMove(id: String, request: cask.Request) = {
-    logger.info(s"Updating move in repertoire $id: ${request.text()}")
-    val json = ujson.read(request.text())
-    val parentSfen = json("parentSfen").str
-    val usi = json("usi").str
-    val comment = json.obj.get("comment").map(_.str)
-    val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
-    
-    Await.result(RepertoireRepository.updateMove(id, parentSfen, usi, comment, isPuzzle), 10.seconds)
-    logger.info(s"Move $usi updated successfully")
-    ujson.Obj("success" -> true)
+  def updateMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val parentSfen = json("parentSfen").str
+        val usi = json("usi").str
+        val comment = json.obj.get("comment").map(_.str)
+        val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
+
+        Await.result(RepertoireRepository.updateMove(id, parentSfen, usi, comment, isPuzzle), 10.seconds)
+        logger.info(s"Move $usi updated successfully")
+        cask.Response(ujson.Obj("success" -> true))
+      }
+    }
   }
 
   @cask.post("/repertoire/:id/move/delete")
-  def deleteMove(id: String, request: cask.Request) = {
-    logger.info(s"Deleting move from repertoire $id: ${request.text()}")
-    val json = ujson.read(request.text())
-    val parentSfen = json("parentSfen").str
-    val usi = json("usi").str
-    
-    Await.result(RepertoireRepository.deleteMove(id, parentSfen, usi), 10.seconds)
-    logger.info(s"Move $usi deleted successfully")
-    ujson.Obj("success" -> true)
+  def deleteMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val parentSfen = json("parentSfen").str
+        val usi = json("usi").str
+
+        Await.result(RepertoireRepository.deleteMove(id, parentSfen, usi), 10.seconds)
+        logger.info(s"Move $usi deleted successfully")
+        cask.Response(ujson.Obj("success" -> true))
+      }
+    }
   }
 
   @cask.post("/repertoire/:id/import")
-  def importMoves(id: String, request: cask.Request) = {
-    logger.info(s"Importing moves to repertoire $id")
-    val json = ujson.read(request.text())
-    val usiListStr = json("usis").str
-    val startSfen = json.obj.get("startSfen").map(_.str).getOrElse(shogi.variant.Standard.initialSfen.value)
-    val comment = json.obj.get("comment").map(_.str).filter(_.nonEmpty)
-    val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
+  def importMoves(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val usiListStr = json("usis").str
+        val startSfen = json.obj.get("startSfen").map(_.str).getOrElse(shogi.variant.Standard.initialSfen.value)
+        val comment = json.obj.get("comment").map(_.str).filter(_.nonEmpty)
+        val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
 
-    val usisStrings = usiListStr.split("\\s+").filter(_.nonEmpty).toList
-    
-    import shogi.format.usi.Usi
-    import shogi.format.forsyth.Sfen
-    import shogi.Replay
+        val usisStrings = usiListStr.split("\\s+").filter(_.nonEmpty).toList
 
-    // Replay returns GameState which has usis and toSfen
-    val res = Replay.gamesWhileValid(usisStrings.flatMap(Usi.apply), Some(Sfen(startSfen)), shogi.variant.Standard)
-    val games = res._1.toList 
-    
-    var currentParentSfen = startSfen
-    var importedCount = 0
+        import shogi.format.usi.Usi
+        import shogi.format.forsyth.Sfen
+        import shogi.Replay
 
-    games.zipWithIndex.foreach { case (state, idx) =>
-      // GameState has usis: Vector[Usi] and toSfen: Sfen
-      state.usis.lastOption.foreach { lastUsi =>
-          val usi = lastUsi.usi
-          val nextSfen = state.toSfen.value
-          val isLast = idx == games.size - 1
-          
-          val (c, p) = if (isLast) (comment, isPuzzle) else (None, None)
-          
-          Await.result(RepertoireRepository.addMove(id, currentParentSfen, usi, nextSfen, c, p), 10.seconds)
-          currentParentSfen = nextSfen
-          importedCount += 1
+        val res = Replay.gamesWhileValid(usisStrings.flatMap(Usi.apply), Some(Sfen(startSfen)), shogi.variant.Standard)
+        val games = res._1.toList
+
+        var currentParentSfen = startSfen
+        var importedCount = 0
+
+        games.zipWithIndex.foreach { case (state, idx) =>
+          state.usis.lastOption.foreach { lastUsi =>
+            val usi = lastUsi.usi
+            val nextSfen = state.toSfen.value
+            val isLast = idx == games.size - 1
+
+            val (c, p) = if (isLast) (comment, isPuzzle) else (None, None)
+
+            Await.result(RepertoireRepository.addMove(id, currentParentSfen, usi, nextSfen, c, p), 10.seconds)
+            currentParentSfen = nextSfen
+            importedCount += 1
+          }
+        }
+
+        cask.Response(ujson.Obj("success" -> true, "importedCount" -> importedCount))
       }
     }
-
-    ujson.Obj("success" -> true, "importedCount" -> importedCount)
   }
 
   initialize()

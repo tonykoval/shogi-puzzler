@@ -4,6 +4,7 @@ let currentSequenceMoves = [];
 let currentSequenceIndex = -1;
 let autoplayInterval = null;
 let areHintsVisible = false;
+let playCountIncremented = false;
 // Sequence starting position (for PV replay from arbitrary SFEN)
 let sequenceStartSfen = null;
 let sequenceStartHands = null;
@@ -31,14 +32,10 @@ function sfenRoleToShogiopsRole(sfenRole) {
 const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
-const isPublicPage = window.location.pathname === "/puzzles";
+const isAuthenticated = document.body.dataset.authenticated === "true";
 
-let apiUrl = hash ? "data?hash=" + hash : "data";
-if (isPublicPage) {
-    apiUrl = "/public-data";
-}
-
-const cacheKey = isPublicPage ? "puzzles_public" : (hash ? "puzzles_" + hash : "puzzles_all");
+const apiUrl = hash ? "data?hash=" + hash : "data";
+const cacheKey = hash ? "puzzles_" + hash : (isAuthenticated ? "puzzles_all" : "puzzles_public");
 
 function loadData(forceReload = false) {
     if (!forceReload) {
@@ -119,6 +116,23 @@ function initPuzzles(json) {
     selectedData = data
     ids = createIds(data)
 
+    // Populate tag filter dropdown with unique tags from all puzzles
+    const tagFilter = $('#tag-filter');
+    if (tagFilter.length) {
+        const allTags = new Set();
+        data.forEach(p => {
+            if (p.tags && Array.isArray(p.tags)) {
+                p.tags.forEach(t => allTags.add(t));
+            }
+        });
+        tagFilter.find('option:not(:first)').remove();
+        Array.from(allTags).sort().forEach(t => {
+            tagFilter.append($('<option>').val(t).text(t));
+        });
+        // Hide filter if no tags exist
+        tagFilter.closest('.row').toggle(allTags.size > 0);
+    }
+
     // Clear existing select2 data if any
     if (games.data('select2')) {
         games.empty();
@@ -141,18 +155,63 @@ $(".reload-data").click(function() {
     loadData(true);
 });
 
+function applySortAndRebuild() {
+    const selectedTag = $('#tag-filter').val();
+    const sortBy = $('#sort-order').val() || 'move';
+
+    if (selectedTag) {
+        selectedData = data.filter(p => p.tags && Array.isArray(p.tags) && p.tags.includes(selectedTag));
+    } else {
+        selectedData = [...data];
+    }
+
+    if (sortBy === 'rating') {
+        selectedData.sort((a, b) => (b.avg_rating || 0) - (a.avg_rating || 0));
+    } else if (sortBy === 'played') {
+        selectedData.sort((a, b) => (b.play_count || 0) - (a.play_count || 0));
+    }
+    // 'move' keeps server default order
+
+    ids = createIds(selectedData);
+
+    if (games.data('select2')) {
+        games.empty();
+    }
+    games.select2({
+        data: ids,
+        templateSelection: formatPuzzle,
+        templateResult: formatPuzzle
+    });
+
+    if (selectedData.length > 0) {
+        selectSituation(randomNumber(0, selectedData.length - 1), selectedData);
+    }
+}
+
+$('#tag-filter').on('change', function() {
+    applySortAndRebuild();
+});
+
+$('#sort-order').on('change', function() {
+    applySortAndRebuild();
+});
+
 function formatPuzzle (state) {
     if (!state.id) {
         return state.text;
     }
-    const data = selectedData[state.id];
-    if (data && data.is_custom_puzzle) {
-        // Show custom puzzle with its name
-        return $('<span><i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + state.text + '</span>');
-    } else if (data && (data.sente || data.gote)) {
-        return $('<span>' + state.text + ' <small style="color: #888">(' + (data.sente || "?") + ' vs ' + (data.gote || "?") + ')</small></span>');
+    const d = selectedData[state.id];
+    let indicators = '';
+    if (d) {
+        if (d.avg_rating > 0) indicators += ' <small style="color:#ffc107;">★' + d.avg_rating.toFixed(1) + '</small>';
+        if (d.play_count > 0) indicators += ' <small style="color:#888;">▶' + d.play_count + '</small>';
     }
-    return state.text;
+    if (d && d.is_custom_puzzle) {
+        return $('<span><i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + state.text + indicators + '</span>');
+    } else if (d && (d.sente || d.gote)) {
+        return $('<span>' + state.text + ' <small style="color: #888">(' + (d.sente || "?") + ' vs ' + (d.gote || "?") + ')</small>' + indicators + '</span>');
+    }
+    return $('<span>' + state.text + indicators + '</span>');
 };
 
 games.on('select2:select', function (e) {
@@ -575,6 +634,9 @@ function createIds(data) {
             } else if (value.ply) {
                 label = "Move " + (value.ply + 1)
             }
+            if (value.tags && Array.isArray(value.tags) && value.tags.length > 0) {
+                label += " [" + value.tags.join(", ") + "]"
+            }
             obj["text"] = label
             return obj
         }
@@ -597,6 +659,7 @@ function selectSituation(id, data) {
     sequenceStartHands = null;
     sequenceStartTurn = null;
     selected = data[id]
+    playCountIncremented = false;
     console.log("[PUZZLE] Selected puzzle data:", selected);
 
     // Update puzzle info panel
@@ -606,6 +669,11 @@ function selectSituation(id, data) {
             $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + selected.custom_puzzle_name);
         } else {
             $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (selected.sente || "?") + " vs " + (selected.gote || "?"));
+        }
+        // Show tags as small badges
+        if (selected.tags && Array.isArray(selected.tags) && selected.tags.length > 0) {
+            const tagBadges = selected.tags.map(t => '<span class="badge bg-info text-dark me-1" style="font-size:0.7em;">' + t + '</span>').join('');
+            $('#players-text').append('<div class="mt-1">' + tagBadges + '</div>');
         }
         $('#turn-text').text(selected.player === "sente" ? "Sente to play" : "Gote to play");
         
@@ -638,6 +706,16 @@ function selectSituation(id, data) {
         if ($("#isPublicCheckbox").length) {
             $("#isPublicCheckbox").prop('checked', !!selected.is_public);
         }
+
+        // Show puzzle stats (play count + avg rating visible, stars hidden until move played)
+        $('#puzzle-stats').show();
+        $('#star-rating').hide();
+        const pc = selected.play_count || 0;
+        $('.play-count-value').text(pc);
+        $('#play-count-badge').show();
+        $('.avg-rating-value').text((selected.avg_rating || 0).toFixed(1));
+        $('.rating-count-value').text('(' + (selected.rating_count || 0) + ')');
+        updateStarDisplay(selected.my_rating || 0);
     }
 
     sg = Shogiground();
@@ -656,6 +734,13 @@ function selectSituation(id, data) {
             top: document.getElementById('hand-top'),
         },
     });
+
+    // Check training deck status
+    if (selected._id && selected._id.$oid) {
+        checkTrainingDeck(selected._id.$oid);
+    } else {
+        $('#training-btn').hide();
+    }
 }
 
 function isMove(engineMove, playerMove, playerPositionMove, returnValue) {
@@ -707,7 +792,7 @@ function formatComment(comment) {
             cls = "text-success";
             icon = '<i class="bi bi-check-circle-fill me-1"></i>';
         } else if (line.startsWith("Second")) {
-            cls = "text-warning";
+            cls = "text-purple";
             icon = '<i class="bi bi-2-circle me-1"></i>';
         } else if (line.startsWith("Third")) {
             cls = "text-info";
@@ -774,7 +859,7 @@ function buildEvalBar(pos, highlightMove, engineScore) {
     }
 
     add(pos.best_move, pos.best, '1st', '#28a745', 1);
-    add(pos.second_move, pos.second, '2nd', '#e8a317', 2);
+    add(pos.second_move, pos.second, '2nd', '#ab47bc', 2);
     add(pos.third_move, pos.third, '3rd', '#17a2b8', 3);
     add(pos.your_move, null, 'Blunder', '#dc3545', 0);
 
@@ -888,6 +973,7 @@ function fireSuccess(pos, num) {
  * Generate the engine analysis button HTML for Swal dialogs
  */
 function getEngineAnalysisButton(sfen, playerColor) {
+    if (!isAuthenticated) return '';
     // Get current board SFEN after player's move
     let currentSfen = sfen;
     if (sg && sg.state) {
@@ -1207,16 +1293,128 @@ function fireSave(text) {
     })
 }
 
+// ===== Star Rating =====
+function updateStarDisplay(rating) {
+    $('#star-rating .star-btn').each(function() {
+        const val = parseInt($(this).data('value'));
+        const icon = $(this).find('i');
+        if (val <= rating) {
+            icon.removeClass('bi-star').addClass('bi-star-fill');
+            $(this).css('color', '#ffc107');
+        } else {
+            icon.removeClass('bi-star-fill').addClass('bi-star');
+            $(this).css('color', '#666');
+        }
+    });
+    if (rating > 0) {
+        $('#rating-label').text('Your rating: ' + rating + '/5');
+    } else {
+        $('#rating-label').text(isAuthenticated ? 'Rate this puzzle' : 'Login to rate');
+    }
+}
+
+$('#star-rating').on('mouseenter', '.star-btn', function() {
+    const hoverVal = parseInt($(this).data('value'));
+    $('#star-rating .star-btn').each(function() {
+        const v = parseInt($(this).data('value'));
+        const icon = $(this).find('i');
+        if (v <= hoverVal) {
+            icon.removeClass('bi-star').addClass('bi-star-fill');
+            $(this).css('color', '#ffc107');
+        } else {
+            icon.removeClass('bi-star-fill').addClass('bi-star');
+            $(this).css('color', '#666');
+        }
+    });
+}).on('mouseleave', '.star-btn', function() {
+    updateStarDisplay(selected ? (selected.my_rating || 0) : 0);
+});
+
+$('#star-rating').on('click', '.star-btn', function() {
+    if (!isAuthenticated) {
+        const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
+        Toast.fire({ icon: 'info', title: 'Login required to rate puzzles' });
+        return;
+    }
+    if (!selected || !selected._id || !selected._id.$oid) return;
+
+    const stars = parseInt($(this).data('value'));
+    $.ajax({
+        url: '/viewer/rate',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: selected._id.$oid, stars: stars }),
+        success: function() {
+            // Update local data
+            const wasNew = !selected.my_rating || selected.my_rating === 0;
+            selected.my_rating = stars;
+
+            // Recompute avg locally
+            const oldCount = selected.rating_count || 0;
+            const oldAvg = selected.avg_rating || 0;
+            if (wasNew) {
+                selected.rating_count = oldCount + 1;
+                selected.avg_rating = (oldAvg * oldCount + stars) / selected.rating_count;
+            } else {
+                // Replace existing rating in average
+                if (oldCount > 0) {
+                    selected.avg_rating = (oldAvg * oldCount - selected._prev_rating + stars) / oldCount;
+                }
+            }
+            selected._prev_rating = stars;
+
+            updateStarDisplay(stars);
+            $('.avg-rating-value').text(selected.avg_rating.toFixed(1));
+            $('.rating-count-value').text('(' + selected.rating_count + ')');
+
+            // Update cache
+            localStorage.setItem(cacheKey, JSON.stringify(data));
+
+            const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, timerProgressBar: true });
+            Toast.fire({ icon: 'success', title: 'Rated ' + stars + ' star' + (stars > 1 ? 's' : '') });
+        },
+        error: function() {
+            const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
+            Toast.fire({ icon: 'error', title: 'Failed to save rating' });
+        }
+    });
+});
+
 function setHints(pos) {
     if (isPlayingSequence) return;
-    sg.setAutoShapes([setHint(pos.best_move), setHint(pos.second_move), setHint(pos.third_move),
-        setHint(pos.your_move)].filter(elements => {
+    const hints = [setHint(pos.best_move), setHint(pos.second_move), setHint(pos.third_move),
+        setHint(pos.your_move)];
+    // Add hints from blunder_moves array
+    if (pos.blunder_moves && Array.isArray(pos.blunder_moves)) {
+        pos.blunder_moves.forEach(bm => {
+            hints.push(setHint(bm));
+        });
+    }
+    sg.setAutoShapes(hints.filter(elements => {
         return elements !== null;
     }))
     areHintsVisible = true;
 }
 
+function incrementPlayCount() {
+    if (playCountIncremented) return;
+    if (!selected || !selected._id || !selected._id.$oid) return;
+    playCountIncremented = true;
+    $.ajax({
+        url: '/viewer/play',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ id: selected._id.$oid }),
+        success: function() {
+            selected.play_count = (selected.play_count || 0) + 1;
+            $('.play-count-value').text(selected.play_count);
+        }
+    });
+}
+
 function resolveMove(pos, r0, r1, r2, r3) {
+    incrementPlayCount();
+    $('#star-rating').show();
     $(".content").html(formatComment(pos.comment))
     $("#show-hints").show();
     
@@ -1226,7 +1424,7 @@ function resolveMove(pos, r0, r1, r2, r3) {
         continuationHtml += `<button class="btn btn-sm btn-outline-success play-continuation-btn me-1 mb-1" data-type="best"><i class="bi bi-1-circle me-1"></i>Top 1</button>`;
     }
     if (pos.second && pos.second.usi && pos.second.usi.split(' ').length > 0) {
-        continuationHtml += `<button class="btn btn-sm btn-outline-warning play-continuation-btn me-1 mb-1" data-type="second"><i class="bi bi-2-circle me-1"></i>Top 2</button>`;
+        continuationHtml += `<button class="btn btn-sm btn-outline-purple play-continuation-btn me-1 mb-1" data-type="second"><i class="bi bi-2-circle me-1"></i>Top 2</button>`;
     }
     if (pos.third && pos.third.usi && pos.third.usi.split(' ').length > 0) {
         continuationHtml += `<button class="btn btn-sm btn-outline-info play-continuation-btn me-1 mb-1" data-type="third"><i class="bi bi-3-circle me-1"></i>Top 3</button>`;
@@ -1329,6 +1527,13 @@ function generateConfig(pos) {
                 $(".content").html(formatComment(pos.comment))
 
                 let r0 = isMove(pos.your_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 0)
+                // Check blunder_moves array (multiple blunders)
+                if (r0 === -1 && pos.blunder_moves && Array.isArray(pos.blunder_moves)) {
+                    for (let i = 0; i < pos.blunder_moves.length; i++) {
+                        r0 = isMove(pos.blunder_moves[i], {"orig": a, "dest": b, "prom": prom}, "MOVE", 0)
+                        if (r0 !== -1) break;
+                    }
+                }
                 let r1 = isMove(pos.best_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 1)
                 let r2 = isMove(pos.second_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 2)
                 let r3 = isMove(pos.third_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 3)
@@ -1342,6 +1547,13 @@ function generateConfig(pos) {
                 $(".content").html(formatComment(pos.comment))
 
                 let r0 = isMove(pos.your_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 0)
+                // Check blunder_moves array (multiple blunders)
+                if (r0 === -1 && pos.blunder_moves && Array.isArray(pos.blunder_moves)) {
+                    for (let i = 0; i < pos.blunder_moves.length; i++) {
+                        r0 = isMove(pos.blunder_moves[i], {"piece": piece, "key": key, "prom": prom}, "DROP", 0)
+                        if (r0 !== -1) break;
+                    }
+                }
                 let r1 = isMove(pos.best_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 1)
                 let r2 = isMove(pos.second_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 2)
                 let r3 = isMove(pos.third_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 3)
@@ -1357,3 +1569,75 @@ function generateConfig(pos) {
 function randomNumber(min, max) {
     return Math.floor(min + Math.random()*(max - min + 1))
 }
+
+// ===== Training Deck Integration =====
+function checkTrainingDeck(puzzleOid) {
+    if (!isAuthenticated || !puzzleOid) {
+        $('#training-btn').hide();
+        return;
+    }
+    $.ajax({
+        url: '/training/check?puzzle_object_id=' + puzzleOid,
+        dataType: 'json',
+        success: function(resp) {
+            const btn = $('#training-btn');
+            btn.show();
+            if (resp.in_deck) {
+                btn.removeClass('btn-outline-warning').addClass('btn-warning');
+                btn.find('.training-btn-text').text('Remove from Deck');
+            } else {
+                btn.removeClass('btn-warning').addClass('btn-outline-warning');
+                btn.find('.training-btn-text').text('Add to Deck');
+            }
+        },
+        error: function() {
+            $('#training-btn').hide();
+        }
+    });
+}
+
+$('#training-btn').click(function() {
+    if (!selected || !selected._id || !selected._id.$oid) return;
+    const puzzleOid = selected._id.$oid;
+    const btn = $(this);
+    const isInDeck = btn.hasClass('btn-warning');
+    const source = selected.is_custom_puzzle ? 'custom_puzzles' : 'puzzles';
+
+    btn.prop('disabled', true);
+
+    if (isInDeck) {
+        $.ajax({
+            url: '/training/remove',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ puzzle_object_id: puzzleOid }),
+            success: function() {
+                btn.removeClass('btn-warning').addClass('btn-outline-warning');
+                btn.find('.training-btn-text').text('Add to Deck');
+                const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, timerProgressBar: true });
+                Toast.fire({ icon: 'success', title: 'Removed from training deck' });
+            },
+            complete: function() { btn.prop('disabled', false); }
+        });
+    } else {
+        $.ajax({
+            url: '/training/add',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ puzzle_object_id: puzzleOid, puzzle_source: source }),
+            success: function() {
+                btn.removeClass('btn-outline-warning').addClass('btn-warning');
+                btn.find('.training-btn-text').text('Remove from Deck');
+                const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, timerProgressBar: true });
+                Toast.fire({ icon: 'success', title: 'Added to training deck' });
+            },
+            error: function(xhr) {
+                if (xhr.status === 409) {
+                    btn.removeClass('btn-outline-warning').addClass('btn-warning');
+                    btn.find('.training-btn-text').text('Remove from Deck');
+                }
+            },
+            complete: function() { btn.prop('disabled', false); }
+        });
+    }
+});

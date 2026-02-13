@@ -13,8 +13,8 @@ object RootRoutes extends BaseRoutes {
   @cask.get("/")
   def index(request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      logger.info(s"Root accessed, redirecting to /puzzles. Cookies: ${request.cookies.keys.mkString(", ")}")
-      noCacheRedirect("/puzzles")
+      logger.info(s"Root accessed, redirecting to /viewer. Cookies: ${request.cookies.keys.mkString(", ")}")
+      noCacheRedirect("/viewer")
     }
   }
 

@@ -20,9 +20,17 @@ object MongoDBConnection {
   val trainingHandsCollection: MongoCollection[Document] = database.getCollection("training_hands")
   val ocrHistoryCollection: MongoCollection[Document] = database.getCollection("ocr_history")
   val usersCollection: MongoCollection[Document] = database.getCollection("users")
+  val srsCardsCollection: MongoCollection[Document] = database.getCollection("srs_cards")
+  val srsAttemptsCollection: MongoCollection[Document] = database.getCollection("srs_attempts")
 
-  println(s"[DB] Connected to database: ${config.getString("database")}")
-  ping().foreach(p => println(s"[DB] Ping: $p"))(scala.concurrent.ExecutionContext.global)
+  println(s"[DB] Initializing connection to database: ${config.getString("database")}")
+  
+  ping().recover {
+    case e: Exception =>
+      println(s"[DB] CRITICAL: Failed to connect to MongoDB: ${e.getMessage}")
+      println(s"[DB] Check your connection string in application.conf and ensure MongoDB is accessible.")
+      "failed"
+  }(scala.concurrent.ExecutionContext.global).foreach(p => println(s"[DB] Initial ping result: $p"))(scala.concurrent.ExecutionContext.global)
 
   // Create unique index on kif_hash
   gamesCollection.createIndex(
@@ -45,7 +53,32 @@ object MongoDBConnection {
     org.mongodb.scala.model.Indexes.ascending("image_data"),
     org.mongodb.scala.model.IndexOptions().unique(true)
   ).toFuture().foreach(_ => println("[DB] Unique index on image_data for training_hands created"))(scala.concurrent.ExecutionContext.global)
-  
+
+  // SRS: unique compound index on (user_email, puzzle_object_id)
+  srsCardsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("puzzle_object_id")
+    ),
+    org.mongodb.scala.model.IndexOptions().unique(true)
+  ).toFuture().foreach(_ => println("[DB] Unique index on (user_email, puzzle_object_id) for srs_cards created"))(scala.concurrent.ExecutionContext.global)
+
+  // SRS: query index on (user_email, next_review)
+  srsCardsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("next_review")
+    )
+  ).toFuture().foreach(_ => println("[DB] Index on (user_email, next_review) for srs_cards created"))(scala.concurrent.ExecutionContext.global)
+
+  // SRS attempts: index on (user_email, reviewed_at)
+  srsAttemptsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("reviewed_at")
+    )
+  ).toFuture().foreach(_ => println("[DB] Index on (user_email, reviewed_at) for srs_attempts created"))(scala.concurrent.ExecutionContext.global)
+
   def ping(): Future[String] = {
     database.runCommand(Document("ping" -> 1)).toFuture().map(_ => "pong")(scala.concurrent.ExecutionContext.global)
   }

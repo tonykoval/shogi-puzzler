@@ -12,8 +12,8 @@ object UserManagementRoutes extends BaseRoutes {
     "*" -> "All Pages",
     "my-games" -> "My Games",
     "repertoire" -> "Repertoire",
-    "viewer" -> "My Puzzle Viewer",
-    "puzzles" -> "Public Puzzles",
+    "viewer" -> "Puzzles",
+    "puzzle-creator" -> "Puzzle Editor",
     "config" -> "Configuration",
     "ocr" -> "OCR Library",
     "admin/users" -> "User Management"

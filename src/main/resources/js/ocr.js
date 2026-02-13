@@ -888,7 +888,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (ocrStatus) ocrStatus.innerText = 'Processing: Identifying squares...';
             } else {
                 const processModel = document.getElementById('processModel');
+                const processOcr = document.getElementById('processOcr');
                 if (processModel) processModel.disabled = true;
+                if (processOcr) processOcr.disabled = true;
                 if (ocrStatus) ocrStatus.innerText = `Processing: Running ${mode.toUpperCase()} on squares...`;
             }
             
@@ -965,8 +967,10 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             const identifySquares = document.getElementById('identifySquares');
             const processModel = document.getElementById('processModel');
+            const processOcr = document.getElementById('processOcr');
             if (identifySquares) identifySquares.disabled = false;
             if (processModel) processModel.disabled = false;
+            if (processOcr) processOcr.disabled = false;
         }
     }
 

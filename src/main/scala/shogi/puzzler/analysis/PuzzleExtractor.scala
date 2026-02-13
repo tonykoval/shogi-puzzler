@@ -207,6 +207,7 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
                           ): TacticalPuzzle = {
 
     val sfenComponents = positionBeforeBlunder.positionSfen.value.split(" ")
+    val colorToMove = Color(sfenComponents(1)(0)).get
 
     // Extract top engine moves
     val bestMove = toEngineMove(deepAnalysisLines.head)
@@ -214,7 +215,7 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
     val thirdBestMove = deepAnalysisLines.lift(2).map(toEngineMove)
 
     // Generate explanation comment
-    val explanationText = generatePuzzleExplanation(
+    val explanationText = PuzzleExtractor.generatePuzzleExplanation(
       game,
       positionBeforeBlunder,
       positionAfterBlunder,
@@ -228,6 +229,14 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
     val opponentLastMove = positionBeforeBlunder.moveHistoryToPosition.lastOption
     val playerBlunderMove = positionAfterBlunder.moveHistoryToPosition.lastOption
 
+    def moveDetails(move: EngineMove, ranking: Option[Int]): Option[WrapPiece] =
+      getPiece(
+        move.usiNotation.split(" ").head,
+        colorToMove,
+        ranking,
+        Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
+      )
+
     TacticalPuzzle(
       puzzleId = game.gameIdentifier + "#" + positionBeforeBlunder.positionSfen.boardString.getOrElse(""),
       moveNumber = moveNumber,
@@ -235,33 +244,14 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       blunderMoveDetails = playerBlunderMove.flatMap(move =>
         getPiece(
           move.usi,
-          Color(sfenComponents(1)(0)).get,
+          colorToMove,
           None,
           Some(povScoreToWrapScoreForPlayer(positionAfterBlunder.evaluationScore, game.playerColorInGame))
         )
       ),
-      bestMoveDetails = getPiece(
-        bestMove.usiNotation.split(" ").head,
-        Color(sfenComponents(1)(0)).get,
-        Some(1),
-        Some(povScoreToWrapScoreForPlayer(bestMove.evaluationScore, game.playerColorInGame))
-      ),
-      secondMoveDetails = secondBestMove.flatMap(move =>
-        getPiece(
-          move.usiNotation.split(" ").head,
-          Color(sfenComponents(1)(0)).get,
-          Some(2),
-          Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
-        )
-      ),
-      thirdMoveDetails = thirdBestMove.flatMap(move =>
-        getPiece(
-          move.usiNotation.split(" ").head,
-          Color(sfenComponents(1)(0)).get,
-          Some(3),
-          Some(povScoreToWrapScoreForPlayer(move.evaluationScore, game.playerColorInGame))
-        )
-      ),
+      bestMoveDetails = moveDetails(bestMove, Some(1)),
+      secondMoveDetails = secondBestMove.flatMap(moveDetails(_, Some(2))),
+      thirdMoveDetails = thirdBestMove.flatMap(moveDetails(_, Some(3))),
       piecesInHand = Some(sfenComponents(2)),
       explanationComment = Some(explanationText),
       sentePlayerName = game.sentePlayerName,
@@ -275,12 +265,21 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       playerColorName = game.playerColorInGame.name,
       scoreAfterBlunder = povScoreToWrapScoreForPlayer(positionAfterBlunder.evaluationScore, game.playerColorInGame),
       scoreBeforeBlunder = povScoreToWrapScoreForPlayer(positionBeforeBlunder.evaluationScore, game.playerColorInGame),
-      bestEngineLine = toEngineMove(deepAnalysisLines.head),
-      secondBestLine = deepAnalysisLines.lift(1).map(toEngineMove),
-      thirdBestLine = deepAnalysisLines.lift(2).map(toEngineMove)
+      bestEngineLine = bestMove,
+      secondBestLine = secondBestMove,
+      thirdBestLine = thirdBestMove
     )
   }
 
+  /** Convert AnalysisResult to simplified EngineMove */
+  private def toEngineMove(analysisResult: AnalysisResult): EngineMove =
+    EngineMove(
+      usiNotation = analysisResult.principalVariation.getOrElse(""),
+      evaluationScore = analysisResult.evaluationScore
+    )
+}
+
+object PuzzleExtractor {
   /**
    * Generate human-readable explanation of the puzzle.
    *
@@ -289,14 +288,16 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
    * - What the best move was
    * - Score changes for each option
    */
-  private def generatePuzzleExplanation(
-                                         game: ParsedGame,
-                                         positionBefore: AnalysisResult,
-                                         positionAfter: AnalysisResult,
-                                         bestMove: EngineMove,
-                                         secondBest: Option[EngineMove],
-                                         thirdBest: Option[EngineMove]
-                                       ): String = {
+  def generatePuzzleExplanation(
+                                 game: ParsedGame,
+                                 positionBefore: AnalysisResult,
+                                 positionAfter: AnalysisResult,
+                                 bestMove: EngineMove,
+                                 secondBest: Option[EngineMove],
+                                 thirdBest: Option[EngineMove]
+                               ): String = {
+    import MoveFormatter._
+
     val blunderMoveUsi = positionAfter.moveHistoryToPosition.lastOption.map(_.usi).getOrElse("")
     val blunderMoveDesc = getMove(blunderMoveUsi, positionBefore.positionSfen.value).getOrElse("unknown")
     val bestMoveDesc = getMove(bestMove.usiNotation.split(" ").head, positionBefore.positionSfen.value).getOrElse("unknown")
@@ -318,11 +319,4 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       .filter(_.nonEmpty)
       .mkString("\n")
   }
-
-  /** Convert AnalysisResult to simplified EngineMove */
-  private def toEngineMove(analysisResult: AnalysisResult): EngineMove =
-    EngineMove(
-      usiNotation = analysisResult.principalVariation.getOrElse(""),
-      evaluationScore = analysisResult.evaluationScore
-    )
 }

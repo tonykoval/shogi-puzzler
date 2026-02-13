@@ -11,6 +11,21 @@ let selectedCandidateIndices = []; // Checked candidates for viewer (max 3)
 let isAnalyzing = false; // Track if analysis is running
 let arrowsVisible = true; // Track arrow visibility state
 let moveComments = {}; // Store comments for moves: { "candidateIndex_moveIndex": "comment text" }
+let blunderMoves = []; // Store blunder move USI strings (e.g. ["7g7f", "P*5e"])
+let isCapturingBlunder = false; // "Pick from board" mode for blunder moves
+let tags = []; // Store tag strings for categorization
+
+// Get game filter from URL query parameter
+function getGameFilter() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('game') || '';
+}
+
+// Build puzzle list URL preserving game filter
+function getPuzzleListUrl() {
+    const game = getGameFilter();
+    return game ? `/puzzle-creator?game=${encodeURIComponent(game)}` : '/puzzle-creator';
+}
 
 // Initialize the board
 function initBoard(sfen = null) {
@@ -38,7 +53,9 @@ function initBoard(sfen = null) {
         },
         events: {
             change: updateBoardInfo,
-            select: handleSquareSelect
+            select: handleSquareSelect,
+            move: handleBoardMove,
+            drop: handleBoardDrop
         }
     };
 
@@ -159,6 +176,50 @@ function handleSquareSelect(square) {
     }
 }
 
+// Handle board move event — capture blunder move if in capture mode
+function handleBoardMove(orig, dest, prom, captured) {
+    if (!isCapturingBlunder) return;
+
+    const usi = orig + dest + (prom ? '+' : '');
+    finishBlunderCapture(usi);
+}
+
+// Handle board drop event — capture blunder move if in capture mode
+function handleBoardDrop(piece, key, prom) {
+    if (!isCapturingBlunder) return;
+
+    const roleMap = {
+        'pawn': 'P', 'lance': 'L', 'knight': 'N', 'silver': 'S',
+        'gold': 'G', 'bishop': 'B', 'rook': 'R'
+    };
+    const pieceChar = roleMap[piece.role] || piece.role.charAt(0).toUpperCase();
+    const usi = pieceChar + '*' + key;
+    finishBlunderCapture(usi);
+}
+
+// Finish blunder capture: add USI, reset board, exit capture mode
+function finishBlunderCapture(usi) {
+    isCapturingBlunder = false;
+    blunderMoves.push(usi);
+
+    // Reset board to puzzle SFEN
+    const sfen = $('#puzzle-sfen').val().trim();
+    initBoard(sfen || null);
+
+    renderBlunderMovesUI();
+    if (arrowsVisible && allSequences.length > 0) {
+        displayCandidateArrows();
+    }
+
+    Swal.fire({
+        icon: 'success',
+        title: 'Blunder Move Added',
+        text: usi,
+        timer: 1200,
+        showConfirmButton: false
+    });
+}
+
 // Load a puzzle into the editor
 function loadPuzzle(puzzle, showToast) {
     if (showToast === undefined) showToast = true;
@@ -178,6 +239,24 @@ function loadPuzzle(puzzle, showToast) {
         moveComments = {}; // Reset comments
         console.log('[PUZZLE-CREATOR] No move_comments found, reset to empty');
     }
+
+    // Load blunder moves if available
+    if (puzzle.blunder_moves && Array.isArray(puzzle.blunder_moves)) {
+        blunderMoves = puzzle.blunder_moves.slice();
+        console.log('[PUZZLE-CREATOR] Loaded blunder moves:', blunderMoves);
+    } else {
+        blunderMoves = [];
+    }
+    renderBlunderMovesUI();
+
+    // Load tags if available
+    if (puzzle.tags && Array.isArray(puzzle.tags)) {
+        tags = puzzle.tags.slice();
+        console.log('[PUZZLE-CREATOR] Loaded tags:', tags);
+    } else {
+        tags = [];
+    }
+    renderTagsUI();
 
     // Reinitialize board with the puzzle's SFEN
     initBoard(puzzle.sfen);
@@ -253,7 +332,9 @@ function savePuzzle() {
         sfen: sfen || '',
         comments: comments || '',
         isPublic: isPublic,
-        moveComments: getAllMoveComments() // Include move comments
+        moveComments: getAllMoveComments(), // Include move comments
+        blunderMoves: blunderMoves, // Include blunder moves
+        tags: tags // Include tags
     };
 
     if (currentPuzzleId) {
@@ -285,7 +366,7 @@ function savePuzzle() {
                 timer: 1500,
                 showConfirmButton: false
             }).then(() => {
-                window.location.href = '/puzzle-creator';
+                window.location.href = getPuzzleListUrl();
             });
         },
         error: function(xhr, status, error) {
@@ -324,7 +405,7 @@ function deletePuzzle(puzzleId) {
                         timer: 1500,
                         showConfirmButton: false
                     }).then(() => {
-                        window.location.href = '/puzzle-creator';
+                        window.location.href = getPuzzleListUrl();
                     });
                 },
                 error: function(xhr, status, error) {
@@ -586,6 +667,9 @@ function displayCandidateArrows() {
         }
     });
     
+    // Add blunder move arrows (red)
+    addBlunderArrows(autoShapes);
+
     console.log('[PUZZLE-CREATOR] Setting candidate arrows:', autoShapes);
     sg.setAutoShapes(autoShapes);
 }
@@ -1269,6 +1353,186 @@ function pieceToSfen(piece) {
     return piece.color === 'sente' ? role.toLowerCase() : role.toUpperCase();
 }
 
+// Add blunder move arrows (red) to an autoShapes array
+function addBlunderArrows(autoShapes) {
+    if (!blunderMoves || blunderMoves.length === 0) return;
+
+    const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
+    const pieceRoleMap = {
+        'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
+        'G': 'gold', 'B': 'bishop', 'R': 'rook'
+    };
+
+    blunderMoves.forEach((usi) => {
+        if (!usi || usi.length < 3) return;
+
+        if (usi.includes('*')) {
+            const pieceChar = usi.charAt(0);
+            const dest = usi.substring(2);
+            if (!isValidSquare(dest)) return;
+            const role = pieceRoleMap[pieceChar.toUpperCase()] || 'pawn';
+            autoShapes.push({
+                orig: { role: role, color: 'sente' },
+                dest: dest,
+                brush: 'alternative0',
+                label: { text: 'X' }
+            });
+        } else {
+            const orig = usi.substring(0, 2);
+            const dest = usi.substring(2, 4);
+            if (!isValidSquare(orig) || !isValidSquare(dest)) return;
+            autoShapes.push({
+                orig: orig,
+                dest: dest,
+                brush: 'alternative0',
+                label: { text: 'X' }
+            });
+        }
+    });
+}
+
+// Render the blunder moves UI section in the controls panel
+function renderBlunderMovesUI() {
+    // Remove existing blunder UI if any
+    $('#blunder-moves-section').remove();
+
+    const section = $('<div id="blunder-moves-section" class="row g-2 mb-3"></div>');
+    const col = $('<div class="col-12"></div>');
+    col.append('<label class="form-label text-light">Blunder Moves</label>');
+
+    // Input row
+    const inputRow = $('<div class="d-flex gap-2 mb-2"></div>');
+    inputRow.append('<input type="text" class="form-control form-control-sm" id="blunder-move-input" placeholder="USI (e.g. 7g7f or P*5e)">');
+    inputRow.append('<button class="btn btn-danger btn-sm" id="add-blunder-move" title="Add typed USI"><i class="bi bi-plus-lg"></i></button>');
+    inputRow.append('<button class="btn btn-outline-warning btn-sm" id="pick-blunder-move" title="Pick move from board"><i class="bi bi-hand-index"></i> Board</button>');
+    col.append(inputRow);
+
+    // Capture mode indicator
+    if (isCapturingBlunder) {
+        col.append('<div class="alert alert-warning py-1 px-2 mb-2 small" id="capture-indicator"><i class="bi bi-hand-index me-1"></i>Make a move on the board to capture it as blunder move. <a href="#" id="cancel-capture">Cancel</a></div>');
+    }
+
+    // List of current blunder moves
+    const list = $('<div id="blunder-moves-list"></div>');
+    blunderMoves.forEach((usi, index) => {
+        const item = $(`<div class="d-flex align-items-center gap-2 mb-1"></div>`);
+        item.append(`<span class="badge bg-danger">${usi}</span>`);
+        item.append(`<button class="btn btn-outline-danger btn-sm remove-blunder-move" data-index="${index}"><i class="bi bi-x"></i></button>`);
+        list.append(item);
+    });
+    col.append(list);
+
+    section.append(col);
+
+    // Insert after the comments textarea row
+    $('#puzzle-comments').closest('.row').after(section);
+
+    // Bind events
+    $('#add-blunder-move').off('click').on('click', function() {
+        const usi = $('#blunder-move-input').val().trim();
+        if (!usi) return;
+        blunderMoves.push(usi);
+        $('#blunder-move-input').val('');
+        renderBlunderMovesUI();
+        if (arrowsVisible && allSequences.length > 0) {
+            displayCandidateArrows();
+        }
+    });
+
+    // Pick from board button
+    $('#pick-blunder-move').off('click').on('click', function() {
+        isCapturingBlunder = true;
+        renderBlunderMovesUI();
+    });
+
+    // Cancel capture mode
+    $('#cancel-capture').off('click').on('click', function(e) {
+        e.preventDefault();
+        isCapturingBlunder = false;
+        renderBlunderMovesUI();
+    });
+
+    // Allow Enter key in the input
+    $('#blunder-move-input').off('keydown').on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('#add-blunder-move').click();
+        }
+    });
+
+    $('.remove-blunder-move').off('click').on('click', function() {
+        const idx = parseInt($(this).data('index'));
+        blunderMoves.splice(idx, 1);
+        renderBlunderMovesUI();
+        if (arrowsVisible && allSequences.length > 0) {
+            displayCandidateArrows();
+        }
+    });
+}
+
+// Render the tags UI section in the controls panel
+function renderTagsUI() {
+    // Remove existing tags UI if any
+    $('#tags-section').remove();
+
+    const section = $('<div id="tags-section" class="row g-2 mb-3"></div>');
+    const col = $('<div class="col-12"></div>');
+    col.append('<label class="form-label text-light">Tags</label>');
+
+    // Input row
+    const inputRow = $('<div class="d-flex gap-2 mb-2"></div>');
+    inputRow.append('<input type="text" class="form-control form-control-sm" id="tag-input" placeholder="e.g. strategy, endgame, sacrifice">');
+    inputRow.append('<button class="btn btn-info btn-sm" id="add-tag" title="Add tag"><i class="bi bi-plus-lg"></i></button>');
+    col.append(inputRow);
+
+    // List of current tags as badges
+    const list = $('<div id="tags-list" class="d-flex flex-wrap gap-1"></div>');
+    tags.forEach((tag, index) => {
+        const badge = $(`<span class="badge bg-info text-dark d-flex align-items-center gap-1" style="font-size:0.85em;">${tag}<button class="btn-close btn-close-sm remove-tag" data-index="${index}" style="font-size:0.5em;"></button></span>`);
+        list.append(badge);
+    });
+    col.append(list);
+
+    section.append(col);
+
+    // Insert after the blunder moves section, or after comments if blunder section doesn't exist
+    const blunderSection = $('#blunder-moves-section');
+    if (blunderSection.length) {
+        blunderSection.after(section);
+    } else {
+        $('#puzzle-comments').closest('.row').after(section);
+    }
+
+    // Bind events
+    $('#add-tag').off('click').on('click', function() {
+        const val = $('#tag-input').val().trim();
+        if (!val) return;
+        // Support comma-separated input
+        val.split(',').forEach(t => {
+            const trimmed = t.trim();
+            if (trimmed && !tags.includes(trimmed)) {
+                tags.push(trimmed);
+            }
+        });
+        $('#tag-input').val('');
+        renderTagsUI();
+    });
+
+    // Allow Enter key in the input
+    $('#tag-input').off('keydown').on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('#add-tag').click();
+        }
+    });
+
+    $('.remove-tag').off('click').on('click', function() {
+        const idx = parseInt($(this).data('index'));
+        tags.splice(idx, 1);
+        renderTagsUI();
+    });
+}
+
 // Initialize on page load
 $(document).ready(function() {
     // Check if we have pre-loaded puzzle data (edit mode)
@@ -1277,6 +1541,8 @@ $(document).ready(function() {
     } else {
         // Initialize board with initial position
         initBoard();
+        renderBlunderMovesUI();
+        renderTagsUI();
     }
 
     // Save button handler

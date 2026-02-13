@@ -2,12 +2,12 @@ package shogi.puzzler.maintenance
 
 import org.slf4j.LoggerFactory
 import shogi.Color
-import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
-import shogi.puzzler.db.{AppSettings, GameRepository, SettingsRepository}
+import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor, SfenUtils}
+import shogi.puzzler.db.{AppSettings, GameRepository, CustomPuzzleRepository, SettingsRepository}
 import shogi.puzzler.domain.ParsedGame
 import shogi.puzzler.game.GameLoader
 import shogi.puzzler.maintenance.routes.MaintenanceRoutes.getEngineManager
-import shogi.puzzler.serialization.PuzzleJsonSerializer
+import shogi.puzzler.domain.TacticalPuzzle
 
 import java.util.concurrent.{LinkedBlockingQueue, Semaphore}
 import scala.concurrent.{ExecutionContext, Future}
@@ -114,10 +114,10 @@ object AnalysisQueue {
           Await.result(GameRepository.saveGame(kif, gameDetails), 10.seconds)
         } catch {
           case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
-            Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+            Await.result(GameRepository.deleteAnalysisKeepAccepted(kifHash), 10.seconds)
         }
       } else {
-        Await.result(GameRepository.deleteAnalysis(kifHash), 10.seconds)
+        Await.result(GameRepository.deleteAnalysisKeepAccepted(kifHash), 10.seconds)
       }
 
       Await.result(GameRepository.markAsAnalyzed(kifHash), 10.seconds)
@@ -125,8 +125,7 @@ object AnalysisQueue {
       Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
 
       puzzles.foreach { p =>
-        val json = ujson.write(PuzzleJsonSerializer.puzzleToJson(p))
-        Await.result(GameRepository.savePuzzle(json, kifHash), 10.seconds)
+        saveAsCustomPuzzle(p, kifHash, userEmail, parsedGame)
       }
 
       logger.info(s"[AnalysisQueue] Task $taskId complete. ${puzzles.size} puzzles found.")
@@ -136,5 +135,64 @@ object AnalysisQueue {
         logger.error(s"[AnalysisQueue] Task $taskId failed", e)
         TaskManager.fail(taskId, e.getMessage)
     }
+  }
+
+  private def scoreToJson(score: shogi.puzzler.domain.PovScore): ujson.Obj =
+    SfenUtils.scoreToUjson(score)
+
+  private def saveAsCustomPuzzle(puzzle: TacticalPuzzle, kifHash: String, userEmail: Option[String], parsedGame: ParsedGame): Unit = {
+    val sente = parsedGame.sentePlayerName.getOrElse("Unknown")
+    val gote = parsedGame.gotePlayerName.getOrElse("Unknown")
+    val name = s"Move ${puzzle.moveNumber}: $sente vs $gote"
+
+    // Build analysis_data in the format puzzle-creator expects:
+    // [[{moveNum, usi, score, depth, sfenBefore, pv}], ...]
+    val candidates = Seq(
+      Some(puzzle.bestEngineLine),
+      puzzle.secondBestLine,
+      puzzle.thirdBestLine
+    ).flatten
+
+    val analysisData = candidates.map { engineMove =>
+      val usiMoves = engineMove.usiNotation.split(" ")
+      val firstUsi = usiMoves.headOption.getOrElse("")
+      val scoreJson = scoreToJson(engineMove.evaluationScore)
+      // Each candidate is a sequence of moves; we store the first move with full PV
+      ujson.Arr(
+        ujson.Obj(
+          "moveNum" -> 1,
+          "usi" -> firstUsi,
+          "score" -> scoreJson,
+          "depth" -> 0,
+          "sfenBefore" -> puzzle.positionSfen,
+          "pv" -> engineMove.usiNotation
+        )
+      )
+    }
+
+    val analysisDataStr = ujson.write(ujson.Arr(analysisData: _*))
+    val selectedCandidates = candidates.indices.toSeq
+    val selectedSequence = candidates.headOption.map(_.usiNotation.split(" ").toSeq).getOrElse(Seq.empty)
+
+    val blunderMoves = if (puzzle.playerBlunderMove.nonEmpty) Some(Seq(puzzle.playerBlunderMove)) else None
+
+    Await.result(
+      CustomPuzzleRepository.saveCustomPuzzle(
+        name = name,
+        sfen = puzzle.positionSfen,
+        userEmail = userEmail.getOrElse(""),
+        isPublic = false,
+        comments = puzzle.explanationComment,
+        selectedSequence = Some(selectedSequence),
+        moveComments = None,
+        analysisData = Some(analysisDataStr),
+        selectedCandidates = Some(selectedCandidates),
+        gameKifHash = Some(kifHash),
+        blunderMoves = blunderMoves,
+        status = "review",
+        moveNumber = Some(puzzle.moveNumber)
+      ),
+      10.seconds
+    )
   }
 }

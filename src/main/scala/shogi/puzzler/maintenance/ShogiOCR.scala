@@ -174,6 +174,32 @@ object ShogiOCR {
       }
     }
 
+    if (mode == "tesseract" || mode == "all") {
+      try {
+        val ocrImage = if (isGoteHeuristic) rotate180(subImage) else subImage
+        val scaled = ImageHelper.getScaledInstance(ocrImage, ocrImage.getWidth * 3, ocrImage.getHeight * 3)
+        val text = synchronized {
+          tesseractInstance.doOCR(scaled).trim()
+        }
+        val cleanedText = text.replaceAll("\\s+", "")
+        val matched = pieceMap.find { case (kanji, _) => cleanedText.contains(kanji) }
+        matched.foreach { case (kanji, sfenPiece) =>
+          val finalPiece = if (isGoteHeuristic) {
+            if (sfenPiece.startsWith("+")) "+" + sfenPiece.drop(1).toLowerCase
+            else sfenPiece.toLowerCase
+          } else sfenPiece
+          logger.info(s"[OCR] $coords Tesseract detected '$kanji' -> $finalPiece (text: '$cleanedText', isGote: $isGoteHeuristic)")
+          return Some((finalPiece, "OCR", isGoteHeuristic))
+        }
+        if (cleanedText.nonEmpty) {
+          logger.debug(s"[OCR] $coords Tesseract text '$cleanedText' did not match any piece")
+        }
+      } catch {
+        case e: Exception =>
+          logger.debug(s"[OCR] $coords Tesseract failed: ${e.getMessage}")
+      }
+    }
+
     Some(("", "None", isGoteHeuristic))
   }
 

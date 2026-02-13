@@ -98,8 +98,7 @@ object PuzzleJsonSerializer {
           "color" -> drop.visualHint.origin.pieceColor
         ),
         "dest" -> drop.visualHint.destination,
-        "brush" -> drop.visualHint.visualBrush,
-        "description" -> drop.visualHint.moveDescription
+        "brush" -> drop.visualHint.visualBrush
       )
     )
   }
@@ -114,8 +113,7 @@ object PuzzleJsonSerializer {
       "hint" -> ujson.Obj(
         "orig" -> move.visualHint.originSquare,
         "dest" -> move.visualHint.destinationSquare,
-        "brush" -> move.visualHint.visualBrush,
-        "description" -> move.visualHint.moveDescription
+        "brush" -> move.visualHint.visualBrush
       )
     )
   }

@@ -7,7 +7,7 @@ import ujson.Value
 import scalatags.Text.all._
 import scala.concurrent.duration._
 import scala.concurrent.Await
-import shogi.puzzler.db.{GameRepository, SettingsRepository, AppSettings, TrainingRepository, OCRRepository, OCRHistoryEntry}
+import shogi.puzzler.db.{GameRepository, PuzzleRepository, CustomPuzzleRepository, SettingsRepository, AppSettings, TrainingRepository, OCRRepository, OCRHistoryEntry}
 import shogi.puzzler.ui.Components
 import shogi.puzzler.game.{GameLoader, KifAnnotator}
 import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
@@ -874,6 +874,7 @@ object MaintenanceRoutes extends BaseRoutes {
                    div(cls := "small text-muted mb-2")("Click and drag on the image to define the region."),
                    div(cls := "btn-group w-100 mb-2")(
                      button(`type` := "button", id := "processModel", cls := "btn btn-warning", onclick := "window.identifySquaresWithMode('model')")("Identify with Model"),
+                     button(`type` := "button", id := "processOcr", cls := "btn btn-info", onclick := "window.identifySquaresWithMode('tesseract')")("Identify with OCR"),
                      button(`type` := "button", id := "loadFromDb", cls := "btn btn-outline-warning", style := (if (entry.isDefined) "display: inline-block" else "display: none"), onclick := "window.loadFromDb()")("Load from DB")
                    ),
                    button(`type` := "button", id := "identifySquares", cls := "btn btn-secondary w-100 mt-2", onclick := "window.identifySquaresWithOCR(true)")("Identify Squares (no OCR)"),
@@ -1378,7 +1379,7 @@ object MaintenanceRoutes extends BaseRoutes {
               
               val (exists, analyzed, pCount) = if (g.existsInDb) {
                 val hash = kifHash.getOrElse("")
-                val count = if (hash.nonEmpty) Await.result(GameRepository.countPuzzlesForGame(hash), 10.seconds).toInt else 0
+                val count = if (hash.nonEmpty) Await.result(PuzzleRepository.countPuzzlesForGame(hash), 10.seconds).toInt else 0
                 // Use g.isAnalyzed from SearchGame if it was already populated from DB document
                 (true, g.isAnalyzed, count)
               } else {
@@ -1392,7 +1393,7 @@ object MaintenanceRoutes extends BaseRoutes {
                      case _ => false
                    }
                 }
-                val pc = if (ex && an && kifHash.isDefined) Await.result(GameRepository.countPuzzlesForGame(kifHash.get), 10.seconds).toInt else 0
+                val pc = if (ex && an && kifHash.isDefined) Await.result(PuzzleRepository.countPuzzlesForGame(kifHash.get), 10.seconds).toInt else 0
                 (ex, an, pc)
               }
               
@@ -1400,7 +1401,7 @@ object MaintenanceRoutes extends BaseRoutes {
             }
             logger.info(s"[MAINTENANCE] gamesWithDbStatus size: ${gamesWithDbStatus.size}")
             
-            val filteredGames = if (force) gamesWithDbStatus.filter(!_.existsInDb) else gamesWithDbStatus
+            val filteredGames = gamesWithDbStatus
             logger.info(s"[MAINTENANCE] filteredGames size: ${filteredGames.size}")
 
             val renderedFrag = div(
@@ -1485,7 +1486,7 @@ object MaintenanceRoutes extends BaseRoutes {
                               if (g.isAnalyzed) {
                                 div(cls := "d-flex flex-wrap gap-2")(
                                   if (g.puzzleCount > 0) {
-                                    a(href := s"/viewer?hash=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary", title := "Puzzles")(
+                                    a(href := s"/puzzle-creator?game=$kifHash", target := "_blank", cls := "btn btn-sm btn-primary", title := "Puzzles")(
                                       i(cls := "bi bi-puzzle"), tag("span")(cls := "d-none d-lg-inline ms-1")("Puzzles")
                                     )
                                   } else frag(),
@@ -1622,8 +1623,9 @@ object MaintenanceRoutes extends BaseRoutes {
   def analysisData(hash: String, request: cask.Request) = {
     withAuthJson(request, "my-games") { _ =>
       val game = Await.result(GameRepository.getGameByHash(hash), 10.seconds)
-      val puzzles = Await.result(GameRepository.getPuzzlesForGame(hash), 10.seconds)
-      
+      val regularPuzzles = Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
+      val customPuzzles = Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+
       val scores = game.flatMap(_.get("scores")).map { s =>
         s.asArray().getValues.asScala.map { v =>
           if (v.isInt32) v.asInt32().getValue
@@ -1632,8 +1634,8 @@ object MaintenanceRoutes extends BaseRoutes {
           else 0
         }.toSeq
       }.getOrElse(Seq.empty)
-      
-      val puzzleDetails = puzzles.map { p =>
+
+      val regularPuzzleDetails = regularPuzzles.map { p =>
         val moveNumber = p.get("move_number").map { v =>
           if (v.isInt32) v.asInt32().getValue
           else if (v.isInt64) v.asInt64().getValue.toInt
@@ -1649,10 +1651,48 @@ object MaintenanceRoutes extends BaseRoutes {
           "comment" -> ujson.Str(comment)
         )
       }
-      
+
+      val customPuzzleDetails = customPuzzles.flatMap { p =>
+        val moveNumber = p.get("move_number").map { v =>
+          if (v.isInt32) v.asInt32().getValue
+          else if (v.isInt64) v.asInt64().getValue.toInt
+          else if (v.isDouble) v.asDouble().getValue.toInt
+          else 0
+        }.getOrElse(0)
+        if (moveNumber > 0) {
+          val ply = moveNumber - 1
+          val id = p.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
+          val comment = p.get("comments").map(_.asString().getValue).getOrElse("")
+          Some(ujson.Obj(
+            "ply" -> ujson.Num(ply.toDouble),
+            "id" -> ujson.Str(id),
+            "comment" -> ujson.Str(comment)
+          ))
+        } else None
+      }
+
+      val allPuzzleDetails = regularPuzzleDetails ++ customPuzzleDetails
+
       cask.Response(ujson.Obj(
         "scores" -> ujson.Arr(scores.map(s => ujson.Num(s.toDouble)): _*),
-        "puzzles" -> ujson.Arr(puzzleDetails: _*)
+        "puzzles" -> ujson.Arr(allPuzzleDetails: _*)
+      ), headers = Seq("Content-Type" -> "application/json"))
+    }
+  }
+
+  @cask.get("/maintenance-puzzle-stats")
+  def puzzleStats(hash: String, request: cask.Request) = {
+    withAuthJson(request, "my-games") { _ =>
+      val stats = Await.result(PuzzleRepository.getPuzzleStatsForGame(hash), 10.seconds)
+      val regular = stats.getOrElse("regular", 0L)
+      val accepted = stats.getOrElse("accepted", 0L)
+      val review = stats.getOrElse("review", 0L)
+      val total = stats.getOrElse("total", 0L)
+      cask.Response(ujson.Obj(
+        "regular" -> ujson.Num(regular.toDouble),
+        "accepted" -> ujson.Num(accepted.toDouble),
+        "review" -> ujson.Num(review.toDouble),
+        "total" -> ujson.Num(total.toDouble)
       ), headers = Seq("Content-Type" -> "application/json"))
     }
   }
@@ -1736,7 +1776,7 @@ object MaintenanceRoutes extends BaseRoutes {
 
   private def getAnnotatedKif(hash: String): Either[String, String] = {
     val gameDoc = Await.result(GameRepository.getGameByHash(hash), 5.seconds)
-    val puzzles = Await.result(GameRepository.getPuzzlesForGame(hash), 5.seconds)
+    val puzzles = Await.result(PuzzleRepository.getPuzzlesForGame(hash), 5.seconds)
 
     logger.info(s"[MAINTENANCE] Annotating KIF for hash $hash. Puzzles found: ${puzzles.size}")
 

@@ -150,40 +150,63 @@ $(document).on('click', '.graph-btn', function() {
 });
 
 $(document).on('click', '.delete-analysis-btn', function() {
-  if (!confirm('Are you sure you want to delete analysis results?')) return;
   const hash = $(this).data('hash');
   const player = $(this).data('player');
   const $btn = $(this);
-  $btn.prop('disabled', true).text('Deleting...');
-  
-  $.ajax({
-    url: '/maintenance-delete-analysis',
-    type: 'POST',
-    contentType: 'application/json',
-    data: JSON.stringify({ hash: hash }),
-    success: function() {
-      // Invalidate maintenance games cache after deleting analysis
-      const keysToRemove = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
-          keysToRemove.push(key);
-        }
-      }
-      keysToRemove.forEach(key => localStorage.removeItem(key));
 
-      const lishogiName = $('#lishogiNickname').val();
-      const shogiwarsName = $('#shogiwarsNickname').val();
-      const dojo81Name = $('#dojo81Nickname').val();
-      if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
-      if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
-      if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
-    },
-    error: function(xhr) {
-      alert('Error deleting analysis: ' + xhr.statusText);
-      $btn.prop('disabled', false).text('Delete Analysis');
-    }
-  });
+  function doDelete() {
+    $btn.prop('disabled', true).text('Deleting...');
+    $.ajax({
+      url: '/maintenance-delete-analysis',
+      type: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify({ hash: hash }),
+      success: function() {
+        const keysToRemove = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key && (key.startsWith('maintenance_games_') || key.startsWith('puzzles_'))) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(key => localStorage.removeItem(key));
+
+        const lishogiName = $('#lishogiNickname').val();
+        const shogiwarsName = $('#shogiwarsNickname').val();
+        const dojo81Name = $('#dojo81Nickname').val();
+        if (lishogiName && lishogiName !== 'lishogi_user') window.maintenance.doFetch('lishogi', lishogiName, false);
+        if (shogiwarsName && shogiwarsName !== 'swars_user') window.maintenance.doFetch('shogiwars', shogiwarsName, false);
+        if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
+      },
+      error: function(xhr) {
+        alert('Error deleting analysis: ' + xhr.statusText);
+        $btn.prop('disabled', false).text('Delete Analysis');
+      }
+    });
+  }
+
+  // Fetch puzzle stats before confirming
+  $.get('/maintenance-puzzle-stats?hash=' + hash)
+    .done(function(stats) {
+      if (typeof stats === 'string') {
+        try { stats = JSON.parse(stats); } catch (e) { stats = null; }
+      }
+      if (stats && stats.total > 0) {
+        const parts = [];
+        if (stats.accepted > 0) parts.push(stats.accepted + ' accepted');
+        if (stats.review > 0) parts.push(stats.review + ' in review');
+        if (stats.regular > 0) parts.push(stats.regular + ' regular');
+        const msg = 'This will delete ALL ' + stats.total + ' puzzle(s) (' + parts.join(', ') + ') and analysis data. Are you sure?';
+        if (!confirm(msg)) return;
+      } else {
+        if (!confirm('Are you sure you want to delete analysis results?')) return;
+      }
+      doDelete();
+    })
+    .fail(function() {
+      if (!confirm('Are you sure you want to delete analysis results?')) return;
+      doDelete();
+    });
 });
 window.maintenance = {
   isFetchingLishogi: false,

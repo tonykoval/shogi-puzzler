@@ -1194,14 +1194,14 @@ var Shogiground = (() => {
     const marker = setAttributes(createSVGElement("marker"), {
       id: `arrowhead-${brush}`,
       orient: "auto",
-      markerWidth: 4,
-      markerHeight: 8,
-      refX: 2.05,
-      refY: 2.01
+      markerWidth: 3,
+      markerHeight: 6,
+      refX: 1.5,
+      refY: 1.5
     });
     marker.appendChild(
       setAttributes(createSVGElement("path"), {
-        d: "M0,0 V4 L3,2 Z"
+        d: "M0,0 V3 L2.25,1.5 Z"
       })
     );
     marker.setAttribute("sgKey", brush);
@@ -1235,7 +1235,7 @@ var Shogiground = (() => {
     return [3 / 64 * ratioAverage(ratio), 4 / 64 * ratioAverage(ratio)];
   }
   function lineWidth(current, ratio) {
-    return (current ? 8.5 : 10) / 64 * ratioAverage(ratio);
+    return (current ? 5 : 6) / 64 * ratioAverage(ratio);
   }
   function arrowMargin(shorten, ratio) {
     return (shorten ? 20 : 10) / 64 * ratioAverage(ratio);

@@ -94,19 +94,19 @@ object Components {
                 a(cls := "nav-link", href := "/repertoire")(i(cls := "bi bi-book me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Repertoire"), scalatags.Text.all.span(cls := "d-lg-none")("Rep"))
               )
             } else (),
-            if (canAccess("viewer")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-eye me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("My Puzzle Viewer"), scalatags.Text.all.span(cls := "d-lg-none")("Viewer"))
-              )
-            } else (),
             if (canAccess("puzzle-creator")) {
               li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzle Creator"), scalatags.Text.all.span(cls := "d-lg-none")("Create"))
+                a(cls := "nav-link", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzle Editor"), scalatags.Text.all.span(cls := "d-lg-none")("Editor"))
               )
             } else (),
             li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/puzzles")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Public Puzzles"), scalatags.Text.all.span(cls := "d-lg-none")("Puzzles"))
+              a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"), scalatags.Text.all.span(cls := "d-lg-none")("Puzzles"))
             ),
+            if (canAccess("training")) {
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/training")(i(cls := "bi bi-mortarboard me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Training"), scalatags.Text.all.span(cls := "d-lg-none")("Train"))
+              )
+            } else (),
             if (canAccess("config")) {
               li(cls := "nav-item")(
                 a(cls := "nav-link", href := "/config")(i(cls := "bi bi-gear me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Config"), scalatags.Text.all.span(cls := "d-lg-none")("Cfg"))
