@@ -121,8 +121,8 @@ object ViewerRoutes extends BaseRoutes {
                       i(cls := "bi bi-play-circle me-1"), tag("span")(cls := "play-count-value")("0"), " plays"
                     )
                   ),
-                  div(id := "players-text", cls := "text-muted mb-3", style := "font-size: 0.8rem;")("-"),
                   div(id := "material-text", style := "display:none")("-"),
+                  div(id := "engine-result", cls := "mt-2", style := "display:none;")(),
                   button(id := "play-continuation", cls := "btn btn-sm btn-outline-success w-100 mb-2", style := "display:none") (
                     i(cls := "bi bi-play-fill me-1"), "Play continuation"
                   ),
@@ -139,7 +139,10 @@ object ViewerRoutes extends BaseRoutes {
                     )
                   ),
                   button(id := "show-hints", cls := "btn btn-sm btn-outline-info w-100 mb-2") (
-                    i(cls := "bi bi-lightbulb-fill me-1"), "Show Hints"
+                    i(cls := "bi bi-lightbulb-fill me-1"), "Show Solutions"
+                  ),
+                  button(id := "show-hint", cls := "btn btn-sm btn-outline-warning w-100 mb-2", style := "display:none") (
+                    i(cls := "bi bi-question-circle-fill me-1"), "Hint"
                   ),
                   div(id := "puzzle-stats", cls := "mt-2 pt-2", style := "display:none; border-top: 1px solid rgba(255,255,255,0.1);")(
                     div(cls := "d-flex justify-content-between align-items-center mb-1")(
@@ -164,9 +167,7 @@ object ViewerRoutes extends BaseRoutes {
                   if (isAuthenticated) frag(
                     button(id := "training-btn", cls := "btn btn-sm btn-outline-warning w-100 mt-2", style := "display:none")(
                       i(cls := "bi bi-mortarboard me-1"), tag("span")(cls := "training-btn-text")("Add to Deck")
-                    ),
-                    textarea(cls := "content mt-2 form-control", style := "display:none")(),
-                    button(cls := "btn btn-primary save-comment mt-2", style := "display:none")("Save Comment")
+                    )
                   ) else ()
                 )
               )

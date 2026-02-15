@@ -99,6 +99,37 @@ function showEmptyState() {
     // Hide board, controls and side panel; show empty state inside the grid
     $('.puzzle__board, .puzzle__controls, .puzzle__side').hide();
     $('#empty-state').show();
+    
+    // Get next review time and update the message
+    $.ajax({
+        url: '/training/stats',
+        dataType: 'json',
+        success: function(stats) {
+            if (stats.next_review_time) {
+                const nextTime = new Date(stats.next_review_time);
+                const now = new Date();
+                const diffMs = nextTime - now;
+                const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+                
+                let nextText;
+                if (diffDays <= 0) {
+                    nextText = 'soon';
+                } else if (diffDays === 1) {
+                    nextText = 'tomorrow';
+                } else if (diffDays < 7) {
+                    nextText = 'in ' + diffDays + ' days';
+                } else if (diffDays < 30) {
+                    const weeks = Math.ceil(diffDays / 7);
+                    nextText = 'in ' + weeks + ' week' + (weeks > 1 ? 's' : '');
+                } else {
+                    const months = Math.ceil(diffDays / 30);
+                    nextText = 'in ' + months + ' month' + (months > 1 ? 's' : '');
+                }
+                
+                $('#empty-state p').html('No puzzles are due for review right now.<br>Next puzzle will be available ' + nextText + '.<br>Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">Puzzle Viewer</a> using the deck button.');
+            }
+        }
+    });
 }
 
 function isMove(engineMove, playerMove, playerPositionMove, returnValue) {

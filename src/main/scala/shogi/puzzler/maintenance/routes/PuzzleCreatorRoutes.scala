@@ -50,7 +50,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
   }
 
   @cask.get("/puzzle-creator/new")
-  def puzzleCreatorNew(request: cask.Request) = {
+  def puzzleCreatorNew(request: cask.Request, sfen: String = "", blunder: String = "", comment: String = "") = {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
@@ -421,6 +421,13 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                     )
                   ),
                   div(cls := "col-6")(
+                    button(cls := "btn btn-warning w-100", id := "analyze-blunders")(
+                      i(cls := "bi bi-lightning-charge-fill me-2"), "Analyze Blunders"
+                    )
+                  )
+                ),
+                div(cls := "row g-2 mb-3")(
+                  div(cls := "col-6")(
                     button(cls := "btn btn-danger w-100", id := "stop-analysis", style := "display:none;")(
                       i(cls := "bi bi-stop-fill me-2"), "Stop"
                     )
@@ -545,14 +552,15 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val tags = json.obj.get("tags").map { t =>
         t.arr.map(_.str).toSeq
       }
+      val blunderAnalyses = json.obj.get("blunderAnalyses").map(_.str)
       val id = json.obj.get("id").map(_.str)
 
       val result = id match {
         case Some(puzzleId) =>
-          Await.result(CustomPuzzleRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags), 10.seconds)
+          Await.result(CustomPuzzleRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(CustomPuzzleRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, tags = tags), 10.seconds)
+          Await.result(CustomPuzzleRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, tags = tags, blunderAnalyses = blunderAnalyses), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle saved successfully")
       }
       
@@ -644,6 +652,126 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             headers = Seq("Content-Type" -> "application/json"),
             statusCode = 500
           )
+      }
+    }
+  }
+
+  @cask.post("/puzzle-creator/analyze-blunders")
+  def analyzeBlunders(request: cask.Request) = {
+    withAuthJson(request, "puzzle-creator") { email =>
+      val settings = Await.result(SettingsRepository.getAppSettings(Some(email)), 10.seconds)
+      val json = ujson.read(request.text())
+      val sfen = json("sfen").str
+      val blunderMoves = json.obj.get("blunderMoves").map { bm =>
+        bm.arr.map(_.str).toSeq
+      }.getOrElse(Seq.empty)
+      
+      val depth = json.obj.get("depth").map(_.num.toInt).getOrElse(15)
+      val time = json.obj.get("time").map(_.num.toInt).filter(_ > 0)
+      val numMoves = json.obj.get("numMoves").map(_.num.toInt).getOrElse(3)
+
+      if (blunderMoves.isEmpty) {
+        cask.Response(
+          ujson.Obj("success" -> false, "error" -> "No blunder moves provided"),
+          headers = Seq("Content-Type" -> "application/json"),
+          statusCode = 400
+        )
+      } else {
+        try {
+          val engineManager = getEngineManager(settings.enginePath)
+          
+          // Analyze each blunder move - for each blunder, generate a multi-move sequence
+          val blunderAnalyses = blunderMoves.map { blunderMove =>
+            // Get the sequence starting from position after the blunder move
+            // Use analyzeMoveSequences logic but starting from sfen + blunderMove
+            val limit = Limit(depth = Some(depth), time = time.map(_ * 1000))
+            
+            // First, get the initial score after the blunder
+            val initialResults = engineManager.analyzeWithMoves(sfen, Seq(blunderMove), limit, 1)
+            val colorToMove = SfenUtils.sfenTurnToColor(sfen)
+            
+            // Build the sequence: blunder move + engine best response(s)
+            val sequence = scala.collection.mutable.ArrayBuffer[ujson.Obj]()
+            
+            // First add the blunder move
+            val (blunderScoreKind, blunderScoreValue) = if (initialResults.nonEmpty && initialResults.head.contains("score")) {
+              val scorePair = initialResults.head("score").asInstanceOf[(String, Int)]
+              (scorePair._1, scorePair._2)
+            } else {
+              ("cp", 0)
+            }
+            
+            sequence += ujson.Obj(
+              "moveNum" -> 1,
+              "usi" -> blunderMove,
+              "score" -> ujson.Obj("kind" -> blunderScoreKind, "value" -> blunderScoreValue),
+              "depth" -> depth
+            )
+            
+            // Now get best continuation moves
+            val moveHistory = scala.collection.mutable.ArrayBuffer[String](blunderMove)
+            
+            for (moveNum <- 1 until numMoves) {
+              val results = engineManager.analyzeWithMoves(sfen, moveHistory.toSeq, limit, 1)
+              
+              if (results.nonEmpty && results.head.contains("pv")) {
+                val pv = results.head("pv").asInstanceOf[List[String]]
+                if (pv.isEmpty) {
+                  // No more moves available, break
+                  
+                } else {
+                  val bestMove = pv.head
+                  
+                  // Determine whose turn it is
+                  val isCurrentSente = SfenUtils.isSenteTurn(moveNum + 1, sfen)
+                  val currentColorToMove = if (isCurrentSente) Color.Sente else Color.Gote
+                  
+                  val povScore = Score.fromEngine(results.head.get("score"), currentColorToMove)
+                  val senteScore = povScore.forPlayer(Color.Sente)
+                  
+                  val (scoreKind, scoreValue) = senteScore match {
+                    case CpScore(cp) => ("cp", cp)
+                    case MateScore(m) => ("mate", m)
+                    case _ => ("cp", 0)
+                  }
+                  
+                  sequence += ujson.Obj(
+                    "moveNum" -> (moveNum + 1),
+                    "usi" -> bestMove,
+                    "score" -> ujson.Obj("kind" -> scoreKind, "value" -> scoreValue),
+                    "depth" -> depth,
+                    "pv" -> pv.mkString(" ")
+                  )
+                  
+                  moveHistory += bestMove
+                }
+              } else {
+                // No analysis result, break
+              }
+            }
+            
+            ujson.Obj(
+              "blunder" -> blunderMove,
+              "sequence" -> ujson.Arr(sequence.toSeq: _*)
+            )
+          }
+
+          cask.Response(
+            ujson.Obj(
+              "success" -> true,
+              "sfen" -> sfen,
+              "blunderAnalyses" -> ujson.Arr(blunderAnalyses: _*)
+            ),
+            headers = Seq("Content-Type" -> "application/json")
+          )
+        } catch {
+          case e: Exception =>
+            cask.Response(
+              ujson.Obj("success" -> false, "error" -> e.getMessage),
+              headers = Seq("Content-Type" -> "application/json"),
+              statusCode = 500
+            )
+        }
       }
     }
   }

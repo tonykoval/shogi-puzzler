@@ -8,7 +8,7 @@ object CustomPuzzleRepository {
   private val customPuzzlesCollection = MongoDBConnection.customPuzzlesCollection
   private val puzzlesCollection = MongoDBConnection.puzzlesCollection
 
-  def saveCustomPuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None): Future[InsertOneResult] = {
+  def saveCustomPuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None, blunderAnalyses: Option[String] = None): Future[InsertOneResult] = {
     import org.mongodb.scala.bson.BsonString
     import org.mongodb.scala.bson.collection.immutable.Document
 
@@ -27,6 +27,7 @@ object CustomPuzzleRepository {
       "selected_candidates" -> selectedCandidates.getOrElse(Seq.empty),
       "blunder_moves" -> blunderMoves.getOrElse(Seq.empty),
       "tags" -> tags.getOrElse(Seq.empty),
+      "blunder_analyses" -> blunderAnalyses.getOrElse(""),
       "move_number" -> moveNumber.getOrElse(0),
       "created_at" -> System.currentTimeMillis(),
       "updated_at" -> System.currentTimeMillis()
@@ -98,7 +99,7 @@ object CustomPuzzleRepository {
       .toFutureOption()
   }
 
-  def updateCustomPuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, blunderMoves: Option[Seq[String]] = None, tags: Option[Seq[String]] = None): Future[UpdateResult] = {
+  def updateCustomPuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, blunderMoves: Option[Seq[String]] = None, tags: Option[Seq[String]] = None, blunderAnalyses: Option[String] = None): Future[UpdateResult] = {
     import org.mongodb.scala.bson.BsonString
     import org.mongodb.scala.bson.collection.immutable.Document
 
@@ -116,6 +117,7 @@ object CustomPuzzleRepository {
     updates += org.mongodb.scala.model.Updates.set("selected_candidates", selectedCandidates.getOrElse(Seq.empty))
     updates += org.mongodb.scala.model.Updates.set("blunder_moves", blunderMoves.getOrElse(Seq.empty))
     updates += org.mongodb.scala.model.Updates.set("tags", tags.getOrElse(Seq.empty))
+    updates += org.mongodb.scala.model.Updates.set("blunder_analyses", blunderAnalyses.getOrElse(""))
     updates += org.mongodb.scala.model.Updates.set("updated_at", System.currentTimeMillis())
 
     customPuzzlesCollection.updateOne(
@@ -372,7 +374,7 @@ object CustomPuzzleRepository {
 
     val analysisComment = enrichedLines.mkString("\n")
     val commentAlreadyHasAnalysis = comments != null && comments.nonEmpty &&
-      Seq("Best ", "Second ", "Third ").exists(prefix => comments.split('\n').exists(_.startsWith(prefix)))
+      Seq("Best ", "Second ", "Third ", "Blunder ").exists(prefix => comments.split('\n').exists(_.startsWith(prefix)))
     val finalComment = if (comments != null && comments.nonEmpty) {
       if (analysisComment.nonEmpty && !commentAlreadyHasAnalysis) s"$comments\n$analysisComment" else comments
     } else {
@@ -397,6 +399,74 @@ object CustomPuzzleRepository {
           case _ => ""
         }.filter(_.nonEmpty).toSeq
       case _ => Seq.empty[String]
+    }
+
+    // Add blunder line to comment if blunder moves exist
+    if (blunderMovesUsi.nonEmpty) {
+      val blunderUsi = blunderMovesUsi.head
+      // Try to get score information from blunder_analyses
+      val blunderAnalysesStr = customPuzzle.get("blunder_analyses") match {
+        case Some(str) if str.isString => str.asString.getValue
+        case _ => null
+      }
+      val (blunderScoreStr, bestScoreStr) = if (blunderAnalysesStr != null && blunderAnalysesStr.nonEmpty) {
+        try {
+          val analyses = ujson.read(blunderAnalysesStr)
+          if (analyses.arr.nonEmpty) {
+            val firstAnalysis = analyses.arr(0)
+            val blunderSeq = firstAnalysis.obj.get("sequence").map(_.arr).getOrElse(Seq.empty)
+            if (blunderSeq.nonEmpty) {
+              val firstMoveScore = blunderSeq(0).obj.get("score")
+              val blunderScore = firstMoveScore.flatMap(s => scala.util.Try(s.obj.get("value").num.toInt).toOption).getOrElse(0)
+              // Get best move score from rankedMoves
+              val bestMoveDoc = rankedMoves(0).asDocument()
+              val bestScoreDoc = bestMoveDoc.get("score")
+              val bestMoveScore = if (bestScoreDoc != null && bestScoreDoc.isDocument) {
+                val cp = bestScoreDoc.asDocument().get("cp")
+                if (cp != null && cp.isInt32) cp.asInt32().getValue
+                else 0
+              } else 0
+              val bs = if (blunderScore >= 0) s"+$blunderScore" else s"$blunderScore"
+              val bss = if (bestMoveScore >= 0) s"+$bestMoveScore" else s"$bestMoveScore"
+              (Some(bs), Some(bss))
+            } else (None, None)
+          } else (None, None)
+        } catch {
+          case e: Exception => (None, None)
+        }
+      } else (None, None)
+
+      // Get human-readable move description
+      val blunderMoveDesc = usiToMoveDetail(blunderUsi, playerColorName, 0) match {
+        case d: org.bson.BsonDocument =>
+          val fromOpt = d.get("from") match {
+            case s: org.bson.BsonString => s.getValue
+            case _ => ""
+          }
+          val toOpt = d.get("to") match {
+            case s: org.bson.BsonString => s.getValue
+            case _ => ""
+          }
+          val promOpt = d.get("promotion") match {
+            case b: org.bson.BsonBoolean => b.getValue
+            case _ => false
+          }
+          val dropOpt = d.get("drop") match {
+            case s: org.bson.BsonString => Some(s.getValue)
+            case _ => None
+          }
+          dropOpt.getOrElse(s"$fromOpt$toOpt" + (if (promOpt) "+" else ""))
+        case _ => blunderUsi
+      }
+
+      // Build blunder line with score info
+      val blunderLine = (blunderScoreStr, bestScoreStr) match {
+        case (Some(bs), Some(best)) =>
+          s"Blunder [$blunderMoveDesc, score: ($bs → $best)]"
+        case _ =>
+          s"Blunder [$blunderMoveDesc]"
+      }
+      enrichedLines += blunderLine
     }
 
     val yourMoveDetail: org.bson.BsonValue = blunderMovesUsi.headOption match {
@@ -426,6 +496,7 @@ object CustomPuzzleRepository {
       .append("opponent_last_move_usi_positions", BsonNull.VALUE)
       .append("your_move", yourMoveDetail)
       .append("blunder_moves", new BsonArray(blunderMoveDetailsBson))
+      .append("blunder_analyses", new BsonString(if (customPuzzle.getString("blunder_analyses") != null) customPuzzle.getString("blunder_analyses") else ""))
       .append("best_move", bestMoveDetail)
       .append("second_move", secondMoveDetail)
       .append("third_move", thirdMoveDetail)

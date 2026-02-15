@@ -80,6 +80,17 @@ object SRSRepository {
     )).toFuture()
   }
 
+  def getNextReviewTime(email: String): Future[Option[Long]] = {
+    val now = new BsonDateTime(System.currentTimeMillis())
+    cardsCollection.find(Filters.equal("user_email", email))
+      .sort(Sorts.ascending("next_review"))
+      .limit(1)
+      .toFuture()
+      .map(_.headOption.flatMap(card => {
+        card.get("next_review").map(_.asDateTime().getValue)
+      }))
+  }
+
   def getTotalCount(email: String): Future[Long] = {
     cardsCollection.countDocuments(
       Filters.equal("user_email", email)

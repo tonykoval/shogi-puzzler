@@ -87,6 +87,7 @@ object TrainingRoutes extends BaseRoutes {
   def stats(request: cask.Request) = {
     withAuthJson(request, "training") { email =>
       val stats = Await.result(SRSRepository.getStats(email), 10.seconds)
+      val nextReviewTime = Await.result(SRSRepository.getNextReviewTime(email), 10.seconds)
       val json = ujson.Obj(
         "total" -> ujson.Num(stats("total").asInstanceOf[Long].toDouble),
         "due" -> ujson.Num(stats("due").asInstanceOf[Long].toDouble),
@@ -94,7 +95,8 @@ object TrainingRoutes extends BaseRoutes {
         "success_rate" -> ujson.Num(stats("success_rate").asInstanceOf[Long].toDouble),
         "streak" -> ujson.Num(stats("streak").asInstanceOf[Int].toDouble),
         "total_attempts" -> ujson.Num(stats("total_attempts").asInstanceOf[Long].toDouble),
-        "correct_attempts" -> ujson.Num(stats("correct_attempts").asInstanceOf[Long].toDouble)
+        "correct_attempts" -> ujson.Num(stats("correct_attempts").asInstanceOf[Long].toDouble),
+        "next_review_time" -> nextReviewTime.map(ujson.Num(_)).getOrElse(ujson.Null)
       )
       cask.Response(json, headers = Seq("Content-Type" -> "application/json"))
     }

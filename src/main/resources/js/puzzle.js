@@ -4,6 +4,7 @@ let currentSequenceMoves = [];
 let currentSequenceIndex = -1;
 let autoplayInterval = null;
 let areHintsVisible = false;
+let isPieceHintVisible = false;
 let playCountIncremented = false;
 // Sequence starting position (for PV replay from arbitrary SFEN)
 let sequenceStartSfen = null;
@@ -290,6 +291,8 @@ function clearShapes() {
     if (sg) {
         sg.setAutoShapes([]);
         areHintsVisible = false;
+        isPieceHintVisible = false;
+        $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>Hint');
     }
 }
 
@@ -568,6 +571,30 @@ $("#show-hints").click(function() {
     }
 });
 
+// Hint button - circles the piece that should be moved for the best move
+$("#show-hint").click(function() {
+    if (selected) {
+        if (isPieceHintVisible) {
+            clearPieceHint();
+        } else {
+            stopAutoplay();
+            isPlayingSequence = false;
+            $("#continuation-controls").hide();
+            
+            // Reset board to initial puzzle state
+            sg.set({
+                sfen: {
+                    board: selected.sfen,
+                    hands: selected.hands,
+                },
+                lastDests: selected.opponentLastMovePosition,
+            });
+            
+            showPieceHint(selected);
+        }
+    }
+});
+
 $(".lishogi-position").click( function () {
     const lishogiSfen = selected.sfen.replace(/ /g, '_');
     window.open("https://lishogi.org/analysis/" + lishogiSfen, "_blank");
@@ -612,11 +639,6 @@ $(".next-puzzle").click( function () {
     }
 });
 
-$(".save-comment").click( function () {
-    const text = $(".content").val()
-    fireSave(text)
-});
-
 function createIds(data) {
     if (!Array.isArray(data)) {
         console.error("createIds expected array, got:", typeof data, data);
@@ -648,11 +670,11 @@ function selectSituation(id, data) {
     games.val(id)
     games.trigger('change.select2');
     $('.content').html('<b>Play the correct move!</b>');
-    $('.save-comment').hide();
     $('#play-continuation').hide();
     $('#continuation-options').hide().empty();
     $('#continuation-controls').hide();
     $('#show-hints').hide();
+    $('#show-hint').show();
     stopAutoplay();
     isPlayingSequence = false;
     sequenceStartSfen = null;
@@ -661,20 +683,9 @@ function selectSituation(id, data) {
     selected = data[id]
     playCountIncremented = false;
     console.log("[PUZZLE] Selected puzzle data:", selected);
-
+    
     // Update puzzle info panel
     if (selected) {
-        // Show custom puzzle name or player names
-        if (selected.is_custom_puzzle && selected.custom_puzzle_name) {
-            $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + selected.custom_puzzle_name);
-        } else {
-            $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (selected.sente || "?") + " vs " + (selected.gote || "?"));
-        }
-        // Show tags as small badges
-        if (selected.tags && Array.isArray(selected.tags) && selected.tags.length > 0) {
-            const tagBadges = selected.tags.map(t => '<span class="badge bg-info text-dark me-1" style="font-size:0.7em;">' + t + '</span>').join('');
-            $('#players-text').append('<div class="mt-1">' + tagBadges + '</div>');
-        }
         $('#turn-text').text(selected.player === "sente" ? "Sente to play" : "Gote to play");
         
         // Disable "Game" button if no valid URL and no valid hash
@@ -1022,7 +1033,7 @@ function getEngineAnalysisButton(sfen, playerColor) {
                 <button class="btn btn-sm btn-warning w-100 mt-2 engine-analysis-btn" data-sfen="${currentSfen}" data-player="${playerColor}">
                     <i class="bi bi-cpu me-1"></i>Engine Analysis
                 </button>
-            </div>
+                            </div>
         </div>
         <div id="engine-result" class="mt-2" style="display:none;"></div>
     </div>`;
@@ -1249,50 +1260,6 @@ function runEngineAnalysis(sfen, playerColor, resultContainer) {
     });
 }
 
-function fireSave(text) {
-    Swal.fire({
-        icon: 'question',
-        title: 'Update',
-        html: '<p>Do you want update the comment?</p>' +
-            '<div>' + formatComment(text) + '</div>' +
-            '<p><b>Feedback</b></p>',
-        showCancelButton: true,
-        input: 'radio',
-        // TODO
-        inputOptions: {'yes': 'Yes',
-            'no': 'No'},
-        inputValidator: (value) => {
-            if (!value) {
-                // TODO
-                return 'You need to choose something!'
-            }
-        },
-        confirmButtonColor: '#3085d6',
-        cancelButtonColor: '#d33',
-        confirmButtonText: 'Send!'
-    }).then((result) => {
-        if (result.isConfirmed) {
-            const jsondata = {"id": selected.id, "comment": text, "timestamp": Date.now(),
-                feedback: Swal.getInput().value};
-            
-            fetch('/api/feedback', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(jsondata),
-            })
-            .then(response => response.json())
-            .then(data => {
-                console.log('Success:', data);
-            })
-            .catch((error) => {
-                console.error('Error:', error);
-            });
-        }
-    })
-}
-
 // ===== Star Rating =====
 function updateStarDisplay(rating) {
     $('#star-rating .star-btn').each(function() {
@@ -1396,6 +1363,51 @@ function setHints(pos) {
     areHintsVisible = true;
 }
 
+// Show a circle around the piece that should be moved for the best move
+function showPieceHint(pos) {
+    if (isPlayingSequence || !pos || !pos.best_move) return;
+    
+    const hint = setHint(pos.best_move);
+    if (!hint) return;
+    
+    // The hint object directly has orig and dest properties
+    let shape = null;
+    
+    // Check if it's a drop (has role in orig) or regular move
+    if (hint.orig && typeof hint.orig === 'object' && hint.orig.role) {
+        // Drop move - hint.orig contains {role, color} and hint.dest contains the square
+        if (hint.dest) {
+            shape = {
+                orig: hint.dest,
+                dest: hint.dest,
+                brush: "primary"
+            };
+        }
+    } else if (hint.orig && typeof hint.orig === 'string') {
+        // Regular move - show circle on origin square
+        shape = {
+            orig: hint.orig,
+            dest: hint.orig,
+            brush: "primary"
+        };
+    }
+    
+    if (shape) {
+        sg.setAutoShapes([shape]);
+        isPieceHintVisible = true;
+        $("#show-hint").html('<i class="bi bi-x-circle-fill me-1"></i>Hide Hint');
+    }
+}
+
+// Clear the piece hint
+function clearPieceHint() {
+    if (sg) {
+        sg.setAutoShapes([]);
+    }
+    isPieceHintVisible = false;
+    $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>Hint');
+}
+
 function incrementPlayCount() {
     if (playCountIncremented) return;
     if (!selected || !selected._id || !selected._id.$oid) return;
@@ -1417,6 +1429,7 @@ function resolveMove(pos, r0, r1, r2, r3) {
     $('#star-rating').show();
     $(".content").html(formatComment(pos.comment))
     $("#show-hints").show();
+    $("#show-hint").show();
     
     // Add continuation buttons for top 3 moves
     let continuationHtml = "";
@@ -1539,8 +1552,6 @@ function generateConfig(pos) {
                 let r3 = isMove(pos.third_move, {"orig": a, "dest": b, "prom": prom}, "MOVE", 3)
                 setHints(pos)
                 resolveMove(pos, r0, r1, r2, r3)
-
-                $(".save-comment").show()
             },
             drop: (piece, key, prom) => {
                 if (isPlayingSequence) return;
@@ -1559,8 +1570,6 @@ function generateConfig(pos) {
                 let r3 = isMove(pos.third_move, {"piece": piece, "key": key, "prom": prom}, "DROP", 3)
                 setHints(pos)
                 resolveMove(pos, r0, r1, r2, r3)
-
-                $(".save-comment").show()
             },
         },
     }

@@ -349,3 +349,14 @@ sg-square-over {
 .sg-wrap .sg-shapes marker#arrowhead-alternative2 path {
   fill: #0dcaf0;
 }
+
+/* Hint circle - yellow */
+.sg-wrap .sg-shapes g.hint ellipse {
+  stroke: #ffc107;
+}
+.sg-wrap .sg-shapes g.hint line {
+  stroke: #ffc107;
+}
+.sg-wrap .sg-shapes marker#arrowhead-hint path {
+  fill: #ffc107;
+}

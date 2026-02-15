@@ -288,6 +288,17 @@ function renderVariations() {
                 puzzleIcon.className = 'bi bi-puzzle ms-1 text-warning';
                 puzzleIcon.title = 'Suitable for puzzle';
                 moveActionWrapper.appendChild(puzzleIcon);
+
+                const sendBtn = document.createElement('button');
+                sendBtn.className = 'btn btn-sm btn-outline-info p-1 ms-1';
+                sendBtn.style.lineHeight = '1';
+                sendBtn.innerHTML = '<i class="bi bi-box-arrow-up-right"></i>';
+                sendBtn.title = 'Send to Puzzle Creator';
+                sendBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    sendToPuzzleCreator(currentSfen, move);
+                };
+                moveActionWrapper.appendChild(sendBtn);
             }
 
             moveRow.appendChild(moveActionWrapper);
@@ -420,6 +431,86 @@ async function importMoves() {
 }
 
 window.importMoves = importMoves;
+
+function sendToPuzzleCreator(parentSfen, move) {
+    const params = new URLSearchParams();
+    params.set('sfen', parentSfen);
+    params.set('blunder', move.usi);
+    if (move.comment) {
+        params.set('comment', move.comment);
+    }
+    window.open(`/puzzle-creator/new?${params.toString()}`, '_blank');
+    clearAndAdvancePuzzle(parentSfen, move);
+}
+
+async function clearAndAdvancePuzzle(parentSfen, move) {
+    try {
+        // Clear isPuzzle flag on this move
+        await fetch(`/repertoire/${repertoireId}/move/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parentSfen: parentSfen,
+                usi: move.usi,
+                comment: move.comment || '',
+                isPuzzle: false
+            })
+        });
+
+        // Reload repertoire data
+        const response = await fetch(`/repertoire/${repertoireId}/json`);
+        repertoire = await response.json();
+
+        // Find next puzzle move
+        const nextPuzzle = findNextPuzzleMove();
+        if (nextPuzzle) {
+            // Navigate to that position
+            history = nextPuzzle.path.slice();
+            currentSfen = nextPuzzle.parentSfen;
+            renderBoard();
+            renderVariations();
+            updateMenuState();
+        } else {
+            // No more puzzles, just refresh current view
+            renderBoard();
+            renderVariations();
+            updateMenuState();
+        }
+    } catch (e) {
+        console.error('Error clearing puzzle flag:', e);
+        await loadRepertoire();
+    }
+}
+
+function findNextPuzzleMove() {
+    if (!repertoire || !repertoire.nodes) return null;
+
+    // DFS through repertoire nodes starting from root
+    const rootSfen = repertoire.rootSfen;
+    const visited = new Set();
+
+    function dfs(sfen, path) {
+        const nodeKey = sanitizeSfen(sfen);
+        if (visited.has(nodeKey)) return null;
+        visited.add(nodeKey);
+
+        const node = repertoire.nodes[nodeKey];
+        if (!node || !node.moves) return null;
+
+        for (const move of node.moves) {
+            if (move.isPuzzle) {
+                return { parentSfen: sfen, move: move, path: path };
+            }
+            if (move.nextSfen) {
+                const result = dfs(move.nextSfen, [...path, sfen]);
+                if (result) return result;
+            }
+        }
+        return null;
+    }
+
+    return dfs(rootSfen, []);
+}
 
 // Expose currentSfen for Lishogi analysis button
 Object.defineProperty(window, 'currentSfen', {

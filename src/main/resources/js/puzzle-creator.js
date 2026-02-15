@@ -334,7 +334,8 @@ function savePuzzle() {
         isPublic: isPublic,
         moveComments: getAllMoveComments(), // Include move comments
         blunderMoves: blunderMoves, // Include blunder moves
-        tags: tags // Include tags
+        tags: tags, // Include tags
+        blunderAnalyses: window.blunderAnalyses ? JSON.stringify(window.blunderAnalyses) : null // Include blunder analyses
     };
 
     if (currentPuzzleId) {
@@ -764,7 +765,7 @@ function displaySequence(sequence) {
     
     sequenceHtml += '</div>';
     
-    // Update the feedback area
+    // Update the feedback area - use ID container to allow both analyses to show
     const feedbackDiv = $('.puzzle__feedback .content');
     if (feedbackDiv.length) {
         feedbackDiv.html(`Engine sequence analysis complete! ${sequence.length} moves found.${sequenceHtml}`);
@@ -1281,7 +1282,22 @@ function clearArrows() {
 
 // Format engine score
 function formatScore(score) {
-    if (score === null || score === undefined) return '';
+    if (!score) return '';
+    
+    // Handle object format {kind: 'cp', value: 100}
+    if (typeof score === 'object' && score !== null) {
+        const kind = score.kind;
+        const value = score.value;
+        
+        if (kind === 'mate') {
+            return `M${value}`;
+        } else if (kind === 'cp' || typeof value === 'number') {
+            return value >= 0 ? `+${value}` : `${value}`;
+        }
+        return '';
+    }
+    
+    // Handle legacy formats
     if (score === 'mate') return '#';
     if (typeof score === 'number') {
         return score >= 0 ? `+${score}` : `${score}`;
@@ -1552,7 +1568,7 @@ $(document).ready(function() {
     $('#analyze-sequence').on('click', function() {
         analyzeSequence();
     });
-    
+
     $('#stop-analysis').on('click', function() {
         stopAnalysis();
     });

@@ -1366,7 +1366,8 @@ body[data-notation="2"] .pv_box .pv span {
 }
 
 .puzzle__board {
-    grid-area: board
+    grid-area: board;
+    align-self: start;
 }
 
 .analyse__tools {
