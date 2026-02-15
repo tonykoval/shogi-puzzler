@@ -537,7 +537,12 @@ $("#continuation-autoplay").click(function() {
 
 $(document).on('click', ".play-continuation-btn", function() {
     const type = $(this).data('type');
-    if (selected && selected[type] && selected[type].usi) {
+    if (type === 'blunder_continuation') {
+        const idx = parseInt($(this).data('blunder-index'));
+        if (selected && selected.blunder_continuations && selected.blunder_continuations[idx] && selected.blunder_continuations[idx].usi) {
+            playSequence(selected.blunder_continuations[idx].usi);
+        }
+    } else if (selected && selected[type] && selected[type].usi) {
         playSequence(selected[type].usi);
     }
 });
@@ -680,6 +685,9 @@ function selectSituation(id, data) {
     sequenceStartSfen = null;
     sequenceStartHands = null;
     sequenceStartTurn = null;
+    dialogPos = null;
+    dialogHighlight = null;
+    $('#engine-result').hide().empty();
     selected = data[id]
     playCountIncremented = false;
     console.log("[PUZZLE] Selected puzzle data:", selected);
@@ -817,14 +825,14 @@ function formatComment(comment) {
     }).join("");
 }
 
-/**
- * Map CP score to a 0-100% position using a sigmoid curve.
- * Spreads out the critical -2000..+2000 range, compresses extremes.
- */
 function cpToPercent(cp) {
-    if (cp >= 30000) return 97;
-    if (cp <= -30000) return 3;
-    return 50 + 50 * (2 / (1 + Math.exp(-cp / 600)) - 1);
+    if (cp >= 30000) return 100;
+    if (cp <= -30000) return 0;
+
+    // Koeficient 2450 balansuje body -528 -> ~40% a -1390 -> ~24%
+    let result = 50 + 50 * Math.tanh(cp / 2450);
+
+    return Math.round(result * 100) / 100;
 }
 
 /**
@@ -851,6 +859,14 @@ function extractScore(score) {
 }
 
 /**
+ * Convert CP to a winning probability percentage (0-100).
+ * CP 0 = 50%. Uses the same sigmoid as cpToPercent.
+ */
+function cpToWinPercent(cp) {
+    return Math.round(cpToPercent(cp));
+}
+
+/**
  * Build an evaluation bar showing where each move sits on the CP scale.
  * highlightMove: 0=blunder, 1=best, 2=second, 3=third, null=none
  * engineScore: optional { kind: 'cp'|'mate', value: N } from engine analysis
@@ -872,7 +888,28 @@ function buildEvalBar(pos, highlightMove, engineScore) {
     add(pos.best_move, pos.best, '1st', '#28a745', 1);
     add(pos.second_move, pos.second, '2nd', '#ab47bc', 2);
     add(pos.third_move, pos.third, '3rd', '#17a2b8', 3);
-    add(pos.your_move, null, 'Blunder', '#dc3545', 0);
+
+    // Primary blunder — use first blunder_continuation as score fallback
+    // (custom puzzles store scores in continuations, not in move details)
+    const firstBlunderCont = (pos.blunder_continuations && pos.blunder_continuations.length > 0)
+        ? pos.blunder_continuations[0] : null;
+    add(pos.your_move, firstBlunderCont, 'Blunder', '#dc3545', 0);
+
+    // Additional blunder moves (skip index 0 which duplicates your_move)
+    if (pos.blunder_moves && Array.isArray(pos.blunder_moves) && pos.blunder_moves.length > 1) {
+        for (let idx = 1; idx < pos.blunder_moves.length; idx++) {
+            const bm = pos.blunder_moves[idx];
+            let label = 'Blunder ' + (idx + 1);
+            let continuation = null;
+            if (pos.blunder_continuations && pos.blunder_continuations[idx]) {
+                const bc = pos.blunder_continuations[idx];
+                if (bc.blunder_move) label = bc.blunder_move;
+                continuation = bc;
+            }
+            // Use lighter red and id=-1 so never highlighted as "(You)"
+            add(bm, continuation, label, '#e57373', -1);
+        }
+    }
 
     // Add engine analysis marker if provided
     if (engineScore) {
@@ -894,21 +931,42 @@ function buildEvalBar(pos, highlightMove, engineScore) {
                      : isEngine ? '2px solid #333'
                      : '1px solid rgba(0,0,0,0.3)';
         const zIdx = isEngine ? 12 : m.isYou ? 10 : 5;
-        return `<div style="position:absolute;left:${m.pct}%;top:50%;transform:translate(-50%,-50%);z-index:${zIdx};" title="${m.label}: ${m.text}">
+        const winPct = cpToWinPercent(m.cp);
+        const losePct = 100 - winPct;
+        return `<div style="position:absolute;left:${m.pct}%;top:50%;transform:translate(-50%,-50%);z-index:${zIdx};" title="${m.label}: ${m.text} — You ${winPct}% / Opp ${losePct}%">
             <div style="width:${size}px;height:${size}px;border-radius:50%;background:${m.color};border:${border};box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>
         </div>`;
     }).join('');
 
-    // Build legend items
+    // Build legend items with win percentage tooltips on hover
     const legend = items.map(m => {
         const isEngine = m.isEngine;
         const fw = (m.isYou || isEngine) ? 'bold' : 'normal';
         const ul = m.isYou ? 'underline' : 'none';
         const clr = isEngine ? '#fff' : m.color;
-        return `<span style="color:${clr};font-weight:${fw};text-decoration:${ul};white-space:nowrap;">● ${m.label}: ${m.text}</span>`;
+        const winPct = cpToWinPercent(m.cp);
+        const losePct = 100 - winPct;
+        const winColor = winPct >= 50 ? '#28a745' : '#dc3545';
+        const loseColor = losePct >= 50 ? '#dc3545' : '#28a745';
+        return `<span style="color:${clr};font-weight:${fw};text-decoration:${ul};white-space:nowrap;cursor:help;position:relative;display:inline-block;" class="eval-legend-item">` +
+            `● ${m.label}: ${m.text}` +
+            `<span class="eval-win-tooltip" style="position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:#eee;padding:6px 10px;border-radius:6px;font-size:0.85em;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,0.6);display:none;">` +
+                `<span style="display:flex;align-items:center;gap:6px;">` +
+                    `<span style="color:${winColor};font-weight:bold;">You ${winPct}%</span>` +
+                    `<span style="display:inline-block;width:60px;height:8px;background:${loseColor};border-radius:4px;overflow:hidden;">` +
+                        `<span style="display:block;width:${winPct}%;height:100%;background:${winColor};"></span>` +
+                    `</span>` +
+                    `<span style="color:${loseColor};font-weight:bold;">Opp ${losePct}%</span>` +
+                `</span>` +
+                `<span style="position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1a1a2e;"></span>` +
+            `</span>` +
+        `</span>`;
     }).join('<span style="margin:0 4px;color:#555;">|</span>');
 
-    return `<div id="main-eval-bar" style="margin:12px 0 4px 0;">
+    // CSS for hover tooltip (injected once, idempotent)
+    const tooltipStyle = `<style>.eval-legend-item:hover .eval-win-tooltip{display:block!important;}</style>`;
+
+    return `${tooltipStyle}<div id="main-eval-bar" style="margin:12px 0 4px 0;">
         <div style="position:relative;height:28px;border-radius:14px;background:linear-gradient(to right,#5c1a1a 0%,#dc3545 12%,#e8a317 38%,#28a745 62%,#1a5c28 100%);box-shadow:inset 0 1px 3px rgba(0,0,0,0.4);">
             <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.35);z-index:1;"></div>
             ${markers}
@@ -916,7 +974,7 @@ function buildEvalBar(pos, highlightMove, engineScore) {
         <div style="display:flex;justify-content:space-between;font-size:0.6em;color:#999;margin-top:2px;padding:0 4px;">
             <span>Losing</span><span>0</span><span>Winning</span>
         </div>
-        <div style="margin-top:4px;text-align:center;font-size:0.8em;line-height:1.6;">${legend}</div>
+        <div style="margin-top:4px;text-align:center;font-size:0.8em;line-height:1.8;overflow:visible;">${legend}</div>
     </div>`;
 }
 
@@ -1429,7 +1487,7 @@ function resolveMove(pos, r0, r1, r2, r3) {
     $('#star-rating').show();
     $(".content").html(formatComment(pos.comment))
     $("#show-hints").show();
-    $("#show-hint").show();
+    $("#show-hint").hide();
     
     // Add continuation buttons for top 3 moves
     let continuationHtml = "";
@@ -1442,12 +1500,18 @@ function resolveMove(pos, r0, r1, r2, r3) {
     if (pos.third && pos.third.usi && pos.third.usi.split(' ').length > 0) {
         continuationHtml += `<button class="btn btn-sm btn-outline-info play-continuation-btn me-1 mb-1" data-type="third"><i class="bi bi-3-circle me-1"></i>Top 3</button>`;
     }
-    
+    // Add blunder continuation buttons
+    if (pos.blunder_continuations && Array.isArray(pos.blunder_continuations) && pos.blunder_continuations.length > 0) {
+        pos.blunder_continuations.forEach((bc, idx) => {
+            if (bc.usi) {
+                continuationHtml += `<button class="btn btn-sm btn-outline-danger play-continuation-btn me-1 mb-1" data-type="blunder_continuation" data-blunder-index="${idx}"><i class="bi bi-exclamation-triangle me-1"></i>${bc.blunder_move || 'B' + (idx + 1)}</button>`;
+            }
+        });
+    }
+
     if (continuationHtml) {
         $("#continuation-options").html(continuationHtml).show();
         $("#play-continuation").hide(); // Hide the old single button
-        // Initialize sequence data even before user clicks "Play", so manual stepping works
-        // But maybe better wait for click to avoid clearing arrows prematurely if they just finished the puzzle
     }
 
     if (isPlayingSequence) return;

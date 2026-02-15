@@ -372,15 +372,6 @@ object CustomPuzzleRepository {
       }
     }
 
-    val analysisComment = enrichedLines.mkString("\n")
-    val commentAlreadyHasAnalysis = comments != null && comments.nonEmpty &&
-      Seq("Best ", "Second ", "Third ", "Blunder ").exists(prefix => comments.split('\n').exists(_.startsWith(prefix)))
-    val finalComment = if (comments != null && comments.nonEmpty) {
-      if (analysisComment.nonEmpty && !commentAlreadyHasAnalysis) s"$comments\n$analysisComment" else comments
-    } else {
-      analysisComment
-    }
-
     val tagsList: Seq[String] = customPuzzle.get("tags") match {
       case Some(arr) if arr.isArray =>
         import scala.collection.JavaConverters._
@@ -401,72 +392,73 @@ object CustomPuzzleRepository {
       case _ => Seq.empty[String]
     }
 
-    // Add blunder line to comment if blunder moves exist
-    if (blunderMovesUsi.nonEmpty) {
-      val blunderUsi = blunderMovesUsi.head
-      // Try to get score information from blunder_analyses
-      val blunderAnalysesStr = customPuzzle.get("blunder_analyses") match {
-        case Some(str) if str.isString => str.asString.getValue
-        case _ => null
-      }
-      val (blunderScoreStr, bestScoreStr) = if (blunderAnalysesStr != null && blunderAnalysesStr.nonEmpty) {
-        try {
-          val analyses = ujson.read(blunderAnalysesStr)
-          if (analyses.arr.nonEmpty) {
-            val firstAnalysis = analyses.arr(0)
-            val blunderSeq = firstAnalysis.obj.get("sequence").map(_.arr).getOrElse(Seq.empty)
-            if (blunderSeq.nonEmpty) {
-              val firstMoveScore = blunderSeq(0).obj.get("score")
-              val blunderScore = firstMoveScore.flatMap(s => scala.util.Try(s.obj.get("value").num.toInt).toOption).getOrElse(0)
-              // Get best move score from rankedMoves
-              val bestMoveDoc = rankedMoves(0).asDocument()
-              val bestScoreDoc = bestMoveDoc.get("score")
-              val bestMoveScore = if (bestScoreDoc != null && bestScoreDoc.isDocument) {
-                val cp = bestScoreDoc.asDocument().get("cp")
-                if (cp != null && cp.isInt32) cp.asInt32().getValue
-                else 0
-              } else 0
-              val bs = if (blunderScore >= 0) s"+$blunderScore" else s"$blunderScore"
-              val bss = if (bestMoveScore >= 0) s"+$bestMoveScore" else s"$bestMoveScore"
-              (Some(bs), Some(bss))
-            } else (None, None)
-          } else (None, None)
-        } catch {
-          case e: Exception => (None, None)
+    // Build blunder continuations and comment lines BEFORE computing finalComment
+    val blunderAnalysesRawStr = customPuzzle.get("blunder_analyses") match {
+      case Some(str) if str.isString => str.asString.getValue
+      case _ => null
+    }
+    val hasBlunderAnalyses = blunderAnalysesRawStr != null && blunderAnalysesRawStr.nonEmpty
+
+    val blunderContinuationsBson = new java.util.ArrayList[org.bson.BsonValue]()
+    if (hasBlunderAnalyses) {
+      try {
+        // Count best sequences in analysis_data to calculate comment key offset
+        val bestCount = if (analysisDataStr != null && analysisDataStr.nonEmpty) {
+          try { ujson.read(analysisDataStr).arr.length } catch { case _: Exception => 0 }
+        } else 0
+
+        val blunderArr = ujson.read(blunderAnalysesRawStr)
+        for ((ba, bIdx) <- blunderArr.arr.zipWithIndex) {
+          val blunderMove = ba.obj.get("blunder").map(_.str).getOrElse("")
+          val seq = ba.obj.get("sequence").map(_.arr).getOrElse(Seq.empty)
+          if (blunderMove.nonEmpty && seq.nonEmpty) {
+            val fullUsi = seq.map(_.obj.get("usi").map(_.str).getOrElse("")).mkString(" ")
+            val firstMoveScore = seq(0).obj.get("score") match {
+              case Some(s) =>
+                val kind = s.obj.get("kind").map(_.str).getOrElse("cp")
+                val value = s.obj.get("value").map(_.num.toInt).getOrElse(0)
+                new BsonDocument().append(kind, new BsonInt32(value))
+              case None => new BsonDocument()
+            }
+            val seqStr = seq.map { m =>
+              val u = m.obj.get("usi").map(_.str).getOrElse("")
+              val s = m.obj.get("score").map(formatScore).getOrElse("")
+              if (s.nonEmpty) s"$u ($s)" else u
+            }.mkString(" -> ")
+            // Check for user-edited comment (key = bestCount + blunderIndex + "_0")
+            val blunderCommentKey = s"${bestCount + bIdx}_0"
+            val userComment = moveCommentMap.get(blunderCommentKey).filter(_.nonEmpty)
+            val blunderLine = userComment match {
+              case Some(uc) => s"Blunder [$uc]"
+              case None     => s"Blunder [$seqStr]"
+            }
+            enrichedLines += blunderLine
+            blunderContinuationsBson.add(
+              new BsonDocument()
+                .append("blunder_move", new BsonString(blunderMove))
+                .append("usi", new BsonString(fullUsi))
+                .append("score", firstMoveScore)
+            )
+          }
         }
-      } else (None, None)
-
-      // Get human-readable move description
-      val blunderMoveDesc = usiToMoveDetail(blunderUsi, playerColorName, 0) match {
-        case d: org.bson.BsonDocument =>
-          val fromOpt = d.get("from") match {
-            case s: org.bson.BsonString => s.getValue
-            case _ => ""
-          }
-          val toOpt = d.get("to") match {
-            case s: org.bson.BsonString => s.getValue
-            case _ => ""
-          }
-          val promOpt = d.get("promotion") match {
-            case b: org.bson.BsonBoolean => b.getValue
-            case _ => false
-          }
-          val dropOpt = d.get("drop") match {
-            case s: org.bson.BsonString => Some(s.getValue)
-            case _ => None
-          }
-          dropOpt.getOrElse(s"$fromOpt$toOpt" + (if (promOpt) "+" else ""))
-        case _ => blunderUsi
+      } catch {
+        case e: Exception =>
+          println(s"[CustomPuzzleRepository] Failed to parse blunder_analyses for continuations: ${e.getMessage}")
       }
+    } else if (blunderMovesUsi.nonEmpty) {
+      // Fallback: no blunder_analyses, just show blunder move USI
+      val blunderUsi = blunderMovesUsi.head
+      enrichedLines += s"Blunder [$blunderUsi]"
+    }
 
-      // Build blunder line with score info
-      val blunderLine = (blunderScoreStr, bestScoreStr) match {
-        case (Some(bs), Some(best)) =>
-          s"Blunder [$blunderMoveDesc, score: ($bs → $best)]"
-        case _ =>
-          s"Blunder [$blunderMoveDesc]"
-      }
-      enrichedLines += blunderLine
+    // Compute finalComment AFTER all enrichedLines (best + blunder) are populated
+    val analysisComment = enrichedLines.mkString("\n")
+    val commentAlreadyHasAnalysis = comments != null && comments.nonEmpty &&
+      Seq("Best ", "Second ", "Third ", "Blunder ").exists(prefix => comments.split('\n').exists(_.startsWith(prefix)))
+    val finalComment = if (comments != null && comments.nonEmpty) {
+      if (analysisComment.nonEmpty && !commentAlreadyHasAnalysis) s"$comments\n$analysisComment" else comments
+    } else {
+      analysisComment
     }
 
     val yourMoveDetail: org.bson.BsonValue = blunderMovesUsi.headOption match {
@@ -497,6 +489,7 @@ object CustomPuzzleRepository {
       .append("your_move", yourMoveDetail)
       .append("blunder_moves", new BsonArray(blunderMoveDetailsBson))
       .append("blunder_analyses", new BsonString(if (customPuzzle.getString("blunder_analyses") != null) customPuzzle.getString("blunder_analyses") else ""))
+      .append("blunder_continuations", new BsonArray(blunderContinuationsBson))
       .append("best_move", bestMoveDetail)
       .append("second_move", secondMoveDetail)
       .append("third_move", thirdMoveDetail)

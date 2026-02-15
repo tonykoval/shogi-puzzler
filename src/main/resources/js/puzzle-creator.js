@@ -15,6 +15,10 @@ let blunderMoves = []; // Store blunder move USI strings (e.g. ["7g7f", "P*5e"])
 let isCapturingBlunder = false; // "Pick from board" mode for blunder moves
 let tags = []; // Store tag strings for categorization
 
+// Helper functions for sequence type detection
+function isBlunderSequence(seq) { return seq[0] && seq[0]._type === 'blunder'; }
+function isBestSequence(seq) { return !seq[0]._type || seq[0]._type === 'best'; }
+
 // Get game filter from URL query parameter
 function getGameFilter() {
     const params = new URLSearchParams(window.location.search);
@@ -266,6 +270,12 @@ function loadPuzzle(puzzle, showToast) {
         console.log('[PUZZLE-CREATOR] Restoring saved analysis data...');
         try {
             allSequences = JSON.parse(puzzle.analysis_data);
+            // Tag existing sequences as best if not already tagged
+            allSequences.forEach(seq => {
+                if (seq.length > 0 && !seq[0]._type) {
+                    seq[0]._type = 'best';
+                }
+            });
             displayedSequenceIndex = 0;
             initialSfen = puzzle.sfen || '';
             // Restore selected candidate indices or default to first N
@@ -274,6 +284,32 @@ function loadPuzzle(puzzle, showToast) {
             } else {
                 selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, allSequences.length));
             }
+
+            // Restore blunder analyses and append to allSequences
+            const blunderAnalysesStr = puzzle.blunder_analyses;
+            if (blunderAnalysesStr && blunderAnalysesStr.length > 0) {
+                try {
+                    const blunderData = JSON.parse(blunderAnalysesStr);
+                    window.blunderAnalyses = blunderData;
+                    if (Array.isArray(blunderData)) {
+                        blunderData.forEach((ba, bIdx) => {
+                            if (ba.sequence && ba.sequence.length > 0) {
+                                // Tag as blunder
+                                ba.sequence[0]._type = 'blunder';
+                                ba.sequence[0]._blunderMove = ba.blunder;
+                                ba.sequence[0]._blunderIndex = bIdx;
+                                allSequences.push(ba.sequence);
+                                // Auto-select blunder sequences
+                                selectedCandidateIndices.push(allSequences.length - 1);
+                            }
+                        });
+                    }
+                    console.log('[PUZZLE-CREATOR] Restored blunder analyses:', blunderData.length, 'blunder sequences');
+                } catch (e) {
+                    console.error('[PUZZLE-CREATOR] Failed to parse blunder_analyses:', e);
+                }
+            }
+
             // Display the sequence directly — arrows, playback controls, comments
             setTimeout(() => {
                 displaySequence(allSequences[displayedSequenceIndex]);
@@ -344,13 +380,44 @@ function savePuzzle() {
 
     // Include selected sequence and full analysis data if available
     if (allSequences.length > 0 && displayedSequenceIndex >= 0) {
-        data.analysisData = JSON.stringify(allSequences);
-        // Keep selectedSequence for backward compat
-        const selectedSeq = allSequences[displayedSequenceIndex];
+        // Save only best-move sequences in analysisData (filter out blunder sequences)
+        const bestSequences = allSequences.filter(s => isBestSequence(s));
+        data.analysisData = JSON.stringify(bestSequences);
+
+        // Map selectedCandidateIndices to positions within best-only array
+        const bestOnlyIndices = selectedCandidateIndices
+            .filter(i => isBestSequence(allSequences[i]))
+            .map(origIdx => {
+                // Find position of this sequence in bestSequences
+                let bestIdx = 0;
+                for (let j = 0; j < origIdx; j++) {
+                    if (isBestSequence(allSequences[j])) bestIdx++;
+                }
+                return bestIdx;
+            });
+        if (bestOnlyIndices.length > 0) {
+            data.selectedCandidates = bestOnlyIndices;
+        }
+
+        // Keep selectedSequence for backward compat (use first best sequence)
+        const firstBestIdx = allSequences.findIndex(s => isBestSequence(s));
+        const selectedSeq = firstBestIdx >= 0 ? allSequences[firstBestIdx] : allSequences[0];
         data.selectedSequence = selectedSeq.map(move => move.usi);
-        // Include checked candidate indices for viewer
-        if (selectedCandidateIndices.length > 0) {
-            data.selectedCandidates = selectedCandidateIndices;
+
+        // Save selected blunder sequences as blunderAnalyses
+        const selectedBlunderSequences = selectedCandidateIndices
+            .filter(i => isBlunderSequence(allSequences[i]))
+            .map(i => {
+                const seq = allSequences[i];
+                return {
+                    blunder: seq[0]._blunderMove || seq[0].usi,
+                    sequence: seq
+                };
+            });
+        if (selectedBlunderSequences.length > 0) {
+            data.blunderAnalyses = JSON.stringify(selectedBlunderSequences);
+        } else if (window.blunderAnalyses) {
+            data.blunderAnalyses = JSON.stringify(window.blunderAnalyses);
         }
     }
 
@@ -543,25 +610,90 @@ function analyzeSequence() {
             time: time
         }),
         success: function(response) {
-            Swal.close();
-            
-            // Reset analyzing state
-            isAnalyzing = false;
-            $('#analyze-sequence').prop('disabled', false);
-            $('#stop-analysis').hide();
-            
             console.log('[PUZZLE-CREATOR] Sequence analysis response:', response);
-            
+
             if (response.success && response.sequences && response.sequences.length > 0) {
-                // Store all sequences
+                // Tag each returned sequence's first move with _type: 'best'
+                response.sequences.forEach(seq => {
+                    if (seq.length > 0) {
+                        seq[0]._type = 'best';
+                    }
+                });
+
+                // Store best-move sequences
                 allSequences = response.sequences;
                 displayedSequenceIndex = 0;
-                // Auto-select first N candidates (max 3) for the viewer
-                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, allSequences.length));
+                // Auto-select first N best-move candidates (max 3)
+                const bestCount = allSequences.length;
+                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, bestCount));
 
-                console.log('[PUZZLE-CREATOR] Found', allSequences.length, 'candidate sequences');
-                displaySequence(allSequences[displayedSequenceIndex]);
+                console.log('[PUZZLE-CREATOR] Found', bestCount, 'best-move candidate sequences');
+
+                // Chain blunder analysis if blunder moves exist
+                if (blunderMoves.length > 0) {
+                    Swal.update({
+                        text: `Analyzing blunder moves (${blunderMoves.length})...`
+                    });
+
+                    $.ajax({
+                        url: '/puzzle-creator/analyze-blunders',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({
+                            sfen: sfen,
+                            blunderMoves: blunderMoves,
+                            depth: depth,
+                            time: time,
+                            numMoves: numMoves
+                        }),
+                        success: function(blunderResponse) {
+                            Swal.close();
+                            isAnalyzing = false;
+                            $('#analyze-sequence').prop('disabled', false);
+                            $('#stop-analysis').hide();
+
+                            if (blunderResponse.success && blunderResponse.blunderAnalyses) {
+                                console.log('[PUZZLE-CREATOR] Blunder analysis response:', blunderResponse);
+                                window.blunderAnalyses = blunderResponse.blunderAnalyses;
+
+                                // Tag each blunder sequence and append to allSequences
+                                blunderResponse.blunderAnalyses.forEach((ba, bIdx) => {
+                                    if (ba.sequence && ba.sequence.length > 0) {
+                                        ba.sequence[0]._type = 'blunder';
+                                        ba.sequence[0]._blunderMove = ba.blunder;
+                                        ba.sequence[0]._blunderIndex = bIdx;
+                                        allSequences.push(ba.sequence);
+                                        // Auto-select all blunder candidates
+                                        selectedCandidateIndices.push(allSequences.length - 1);
+                                    }
+                                });
+                            }
+                            displaySequence(allSequences[displayedSequenceIndex]);
+                        },
+                        error: function(xhr, status, error) {
+                            Swal.close();
+                            isAnalyzing = false;
+                            $('#analyze-sequence').prop('disabled', false);
+                            $('#stop-analysis').hide();
+
+                            console.error('[PUZZLE-CREATOR] Blunder analysis failed:', error);
+                            // Still show best-move results even if blunder analysis fails
+                            displaySequence(allSequences[displayedSequenceIndex]);
+                        }
+                    });
+                } else {
+                    Swal.close();
+                    isAnalyzing = false;
+                    $('#analyze-sequence').prop('disabled', false);
+                    $('#stop-analysis').hide();
+                    displaySequence(allSequences[displayedSequenceIndex]);
+                }
             } else {
+                Swal.close();
+                isAnalyzing = false;
+                $('#analyze-sequence').prop('disabled', false);
+                $('#stop-analysis').hide();
+
                 console.error('[PUZZLE-CREATOR] Sequence analysis failed:', response.error);
                 Swal.fire({
                     icon: 'error',
@@ -572,12 +704,12 @@ function analyzeSequence() {
         },
         error: function(xhr, status, error) {
             Swal.close();
-            
+
             // Reset analyzing state
             isAnalyzing = false;
             $('#analyze-sequence').prop('disabled', false);
             $('#stop-analysis').hide();
-            
+
             console.error('Error analyzing sequence:', error);
             Swal.fire({
                 icon: 'error',
@@ -605,71 +737,71 @@ function displayCandidateArrows() {
     if (!sg || !allSequences || allSequences.length === 0) {
         return;
     }
-    
+
     const autoShapes = [];
-    const colors = ['primary', 'alternative1', 'alternative2', 'alternative0'];
-    
+    const bestColors = ['primary', 'alternative1', 'alternative2'];
+
+    // Validate square format (should be like "5e", "7b", etc.)
+    const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
+    const pieceRoleMap = {
+        'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
+        'G': 'gold', 'B': 'bishop', 'R': 'rook'
+    };
+
+    let bestCounter = 0;
+    let blunderCounter = 0;
+    let hasBlunderSequences = false;
+
     allSequences.forEach((sequence, index) => {
         if (!sequence || sequence.length === 0) return;
-        
+
         const firstMove = sequence[0];
         const usi = firstMove.usi;
-        
+
         if (!usi || usi.length < 3) return;
-        
-        const color = colors[index % colors.length];
-        const isSelected = index === displayedSequenceIndex;
-        
-        // Validate square format (should be like "5e", "7b", etc.)
-        const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
-        
-        // Check if it's a drop move (format: P*5e or P*7b)
+
+        const isBlunder = isBlunderSequence(sequence);
+        let brush, labelText;
+
+        if (isBlunder) {
+            hasBlunderSequences = true;
+            blunderCounter++;
+            brush = 'alternative0'; // red
+            labelText = 'B' + blunderCounter;
+        } else {
+            bestCounter++;
+            brush = bestColors[(bestCounter - 1) % bestColors.length];
+            labelText = bestCounter.toString();
+        }
+
         if (usi.includes('*')) {
             const pieceChar = usi.charAt(0);
-            const dest = usi.substring(2);  // Get everything after P*
-            
+            const dest = usi.substring(2);
             if (!isValidSquare(dest)) return;
-            
-            // Map piece character to role name
-            const pieceRoleMap = {
-                'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
-                'G': 'gold', 'B': 'bishop', 'R': 'rook'
-            };
             const role = pieceRoleMap[pieceChar.toUpperCase()] || 'pawn';
-            
-            // For drops, use orig as piece descriptor and dest as target square
             autoShapes.push({
-                orig: {
-                    role: role,
-                    color: 'sente'  // Assuming sente for now
-                },
+                orig: { role: role, color: 'sente' },
                 dest: dest,
-                brush: color,
-                label: {
-                    text: (index + 1).toString()
-                }
+                brush: brush,
+                label: { text: labelText }
             });
         } else {
-            // Regular move: from orig to dest
             const orig = usi.substring(0, 2);
             const dest = usi.substring(2, 4);
-            
             if (!isValidSquare(orig) || !isValidSquare(dest)) return;
-            
-            // Add arrow from origin to destination
             autoShapes.push({
                 orig: orig,
                 dest: dest,
-                brush: color,
-                label: {
-                    text: (index + 1).toString()
-                }
+                brush: brush,
+                label: { text: labelText }
             });
         }
     });
-    
-    // Add blunder move arrows (red)
-    addBlunderArrows(autoShapes);
+
+    // Only add standalone blunder arrows if no blunder sequences are in allSequences
+    if (!hasBlunderSequences) {
+        addBlunderArrows(autoShapes);
+    }
 
     console.log('[PUZZLE-CREATOR] Setting candidate arrows:', autoShapes);
     sg.setAutoShapes(autoShapes);
@@ -699,17 +831,38 @@ function displaySequence(sequence) {
     // Add candidate selector if there are multiple sequences
     if (allSequences.length > 1) {
         sequenceHtml += '<div class="mb-2">';
-        sequenceHtml += '<label class="form-label text-light">Candidates <small class="text-muted">(check up to 3 for viewer)</small>:</label>';
+        sequenceHtml += '<label class="form-label text-light">Candidates <small class="text-muted">(check up to 3 best for viewer)</small>:</label>';
         sequenceHtml += '<div id="candidate-list" class="list-group list-group-flush">';
 
+        let bestCounter = 0;
+        let blunderCounter = 0;
         allSequences.forEach((seq, index) => {
+            const isBlunder = isBlunderSequence(seq);
             const isActive = index === displayedSequenceIndex;
             const isChecked = selectedCandidateIndices.includes(index);
-            const atLimit = selectedCandidateIndices.length >= 3 && !isChecked;
+            // Count how many best-move candidates are checked
+            const bestCheckedCount = selectedCandidateIndices.filter(i => isBestSequence(allSequences[i])).length;
+            const atBestLimit = !isBlunder && bestCheckedCount >= 3 && !isChecked;
             const score = formatSequenceScore(seq[0].score);
-            sequenceHtml += `<div class="list-group-item list-group-item-action d-flex align-items-center p-1 ${isActive ? 'active' : ''}" data-index="${index}" style="background:${isActive ? '#3a3530' : '#2e2a24'};border-color:#444;cursor:pointer;">`;
-            sequenceHtml += `<input type="checkbox" class="form-check-input me-2 candidate-checkbox" data-index="${index}" ${isChecked ? 'checked' : ''} ${atLimit ? 'disabled' : ''} style="cursor:pointer;">`;
-            sequenceHtml += `<span class="candidate-label text-light small flex-grow-1">${index + 1}. ${seq[0].usi} ${score}</span>`;
+
+            let label, extraClasses = '', extraStyle = '';
+            if (isBlunder) {
+                blunderCounter++;
+                label = `B${blunderCounter}. ${seq[0].usi} ${score}`;
+                extraClasses = ' text-danger';
+                extraStyle = 'border-left:3px solid #dc3545;';
+            } else {
+                bestCounter++;
+                label = `${bestCounter}. ${seq[0].usi} ${score}`;
+            }
+
+            sequenceHtml += `<div class="list-group-item list-group-item-action d-flex align-items-center p-1 ${isActive ? 'active' : ''}" data-index="${index}" style="background:${isActive ? '#3a3530' : '#2e2a24'};border-color:#444;cursor:pointer;${extraStyle}">`;
+            sequenceHtml += `<input type="checkbox" class="form-check-input me-2 candidate-checkbox" data-index="${index}" data-seq-type="${isBlunder ? 'blunder' : 'best'}" ${isChecked ? 'checked' : ''} ${atBestLimit ? 'disabled' : ''} style="cursor:pointer;">`;
+            sequenceHtml += `<span class="candidate-label small flex-grow-1${extraClasses}">${label}`;
+            if (isBlunder) {
+                sequenceHtml += ' <span class="badge bg-danger">blunder</span>';
+            }
+            sequenceHtml += `</span>`;
             sequenceHtml += `</div>`;
         });
 
@@ -718,7 +871,7 @@ function displaySequence(sequence) {
     }
     
     sequenceHtml += '<div class="sequence-moves mb-2">';
-    
+
     // Only show the candidate move (first move) with its comment
     const commentKey = `${displayedSequenceIndex}_0`;
     const defaultComment = sequence.map(m => {
@@ -728,11 +881,16 @@ function displaySequence(sequence) {
     const savedComment = moveComments[commentKey];
     const displayComment = (savedComment !== undefined && savedComment !== '') ? savedComment : defaultComment;
 
+    // Use danger styling for blunder sequences, info for best
+    const isDisplayedBlunder = isBlunderSequence(sequence);
+    const commentTextClass = isDisplayedBlunder ? 'text-danger' : 'text-info';
+    const commentBtnClass = isDisplayedBlunder ? 'btn-outline-danger' : 'btn-outline-info';
+
     sequenceHtml += `<div class="sequence-move mb-2 p-2 bg-dark rounded" data-index="0" data-comment-key="${commentKey}">`;
     sequenceHtml += `<div class="d-flex justify-content-between align-items-center">`;
-    sequenceHtml += `<div class="move-comment-display small text-info flex-grow-1 me-2" id="comment-display-${commentKey}">${displayComment}</div>`;
+    sequenceHtml += `<div class="move-comment-display small ${commentTextClass} flex-grow-1 me-2" id="comment-display-${commentKey}">${displayComment}</div>`;
     sequenceHtml += `<div class="btn-group btn-group-sm flex-shrink-0">`;
-    sequenceHtml += `<button class="btn btn-outline-info btn-sm edit-comment-btn" data-comment-key="${commentKey}" title="Edit comment"><i class="bi bi-chat-text"></i></button>`;
+    sequenceHtml += `<button class="btn ${commentBtnClass} btn-sm edit-comment-btn" data-comment-key="${commentKey}" title="Edit comment"><i class="bi bi-chat-text"></i></button>`;
     sequenceHtml += `<button class="btn btn-outline-danger btn-sm delete-comment-btn" data-comment-key="${commentKey}" title="Delete comment"><i class="bi bi-trash"></i></button>`;
     sequenceHtml += `</div>`;
     sequenceHtml += `</div>`;
@@ -795,11 +953,12 @@ function displaySequence(sequence) {
             } else {
                 selectedCandidateIndices = selectedCandidateIndices.filter(i => i !== idx);
             }
-            // Enforce max 3: disable unchecked boxes when limit reached
-            const atLimit = selectedCandidateIndices.length >= 3;
+            // Enforce max 3 only for best-move checkboxes; blunder checkboxes unrestricted
+            const bestCheckedCount = selectedCandidateIndices.filter(i => isBestSequence(allSequences[i])).length;
+            const atBestLimit = bestCheckedCount >= 3;
             $('#candidate-list .candidate-checkbox').each(function() {
-                if (!$(this).is(':checked')) {
-                    $(this).prop('disabled', atLimit);
+                if (!$(this).is(':checked') && $(this).data('seq-type') === 'best') {
+                    $(this).prop('disabled', atBestLimit);
                 }
             });
         });

@@ -415,14 +415,9 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                   ): Frag
                 }.getOrElse(frag()),
                 div(cls := "row g-2 mb-3")(
-                  div(cls := "col-6")(
+                  div(cls := "col-12")(
                     button(cls := "btn btn-success w-100", id := "analyze-sequence")(
                       i(cls := "bi bi-play-fill me-2"), "Analyze"
-                    )
-                  ),
-                  div(cls := "col-6")(
-                    button(cls := "btn btn-warning w-100", id := "analyze-blunders")(
-                      i(cls := "bi bi-lightning-charge-fill me-2"), "Analyze Blunders"
                     )
                   )
                 ),
@@ -689,14 +684,22 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             // First, get the initial score after the blunder
             val initialResults = engineManager.analyzeWithMoves(sfen, Seq(blunderMove), limit, 1)
             val colorToMove = SfenUtils.sfenTurnToColor(sfen)
-            
+            // After the blunder move, the opponent is to move, so the engine
+            // score is from the opponent's perspective.  Normalize to sente.
+            val afterBlunderColor = if (colorToMove == Color.Sente) Color.Gote else Color.Sente
+
             // Build the sequence: blunder move + engine best response(s)
             val sequence = scala.collection.mutable.ArrayBuffer[ujson.Obj]()
-            
-            // First add the blunder move
+
+            // First add the blunder move (score normalized to sente perspective)
             val (blunderScoreKind, blunderScoreValue) = if (initialResults.nonEmpty && initialResults.head.contains("score")) {
-              val scorePair = initialResults.head("score").asInstanceOf[(String, Int)]
-              (scorePair._1, scorePair._2)
+              val povScore = Score.fromEngine(initialResults.head.get("score"), afterBlunderColor)
+              val senteScore = povScore.forPlayer(Color.Sente)
+              senteScore match {
+                case CpScore(cp) => ("cp", cp)
+                case MateScore(m) => ("mate", m)
+                case _ => ("cp", 0)
+              }
             } else {
               ("cp", 0)
             }
