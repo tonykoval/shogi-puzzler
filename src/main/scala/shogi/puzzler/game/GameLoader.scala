@@ -1,9 +1,9 @@
 package shogi.puzzler.game
 
 import cats.data.Validated.{Invalid, Valid}
-import shogi.{Color, Replay}
+import shogi.{Color, Game, Replay}
 import shogi.format.Reader.Result.{Complete, Incomplete}
-import shogi.format.{ParsedNotation, Reader, Tag}
+import shogi.format.{ParsedStep, ParsedNotation, Reader, Tag}
 import shogi.format.forsyth.Sfen
 import shogi.format.kif.KifParser
 import shogi.format.usi.Usi
@@ -160,6 +160,69 @@ object GameLoader {
       case _ =>
         logger.info(s"[LOADER] Player not found in either Sente or Gote")
         None
+    }
+  }
+
+  /**
+   * Parse a KIF file with variations into a flat list of repertoire moves.
+   *
+   * Walks the variation tree produced by KifParser (変化 blocks) and collects
+   * each move as (parentSfen, usi, nextSfen, comment).
+   *
+   * @return (rootSfen, moves) where moves includes all mainline and variation moves
+   */
+  def parseKifTree(kifContent: String): (String, Seq[(String, String, String, Option[String])]) = {
+    logger.info(s"[LOADER] Parsing KIF tree. Content length: ${kifContent.length}")
+
+    KifParser.full(kifContent) match {
+      case Invalid(parseErrors) =>
+        val errorMsg = s"Failed to parse KIF content: $parseErrors"
+        logger.error(s"[LOADER ERROR] $errorMsg")
+        throw new Exception(errorMsg)
+
+      case Valid(parsed) =>
+        val initialGame = Game(parsed.initialSfen, parsed.variant)
+        val rootSfen = initialGame.toSfen.value
+
+        val moves = scala.collection.mutable.Buffer[(String, String, String, Option[String])]()
+        walkMoves(initialGame, parsed.parsedSteps.value, moves)
+
+        logger.info(s"[LOADER] Parsed KIF tree: rootSfen=$rootSfen, ${moves.size} total moves")
+        (rootSfen, moves.toSeq)
+    }
+  }
+
+  private def walkMoves(
+    game: Game,
+    parsedSteps: List[ParsedStep],
+    result: scala.collection.mutable.Buffer[(String, String, String, Option[String])]
+  ): Unit = {
+    parsedSteps match {
+      case Nil =>
+      case step :: rest =>
+        step.toUsi(game.situation) match {
+          case Valid(usi) =>
+            game(usi) match {
+              case Valid(newGame) =>
+                val parentSfen = game.toSfen.value
+                val nextSfen = newGame.toSfen.value
+                val comment = if (step.metas.comments.nonEmpty) Some(step.metas.comments.mkString("\n")) else None
+                result += ((parentSfen, usi.usi, nextSfen, comment))
+
+                // Process variations (alternative moves from the same position)
+                step.metas.variations.foreach { variation =>
+                  walkMoves(game, variation.value, result)
+                }
+
+                // Continue mainline
+                walkMoves(newGame, rest, result)
+
+              case Invalid(err) =>
+                logger.warn(s"[LOADER] Could not apply move: $err")
+            }
+          case Invalid(err) =>
+            logger.warn(s"[LOADER] Could not convert move to USI: $err")
+        }
     }
   }
 }

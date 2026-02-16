@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{RepertoireRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.game.GameLoader
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -53,7 +54,10 @@ object RepertoireRoutes extends BaseRoutes {
     )(
       div(cls := "d-flex justify-content-between align-items-center mb-4")(
         h1("My Repertoires"),
-        button(cls := "btn btn-primary", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#createRepertoireModal")("Create New")
+        div(
+          button(cls := "btn btn-primary", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#createRepertoireModal")("Create New"),
+          button(cls := "btn btn-success ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal")("Import KIF")
+        )
       ),
       
       div(cls := "row")(
@@ -61,6 +65,7 @@ object RepertoireRoutes extends BaseRoutes {
           val id = rep.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
           val name = rep.getString("name")
           val isAutoReload = rep.get("isAutoReload").exists(_.asBoolean().getValue)
+          val isPublic = rep.get("is_public").exists(_.asBoolean().getValue)
           val reloadColor = rep.get("reloadColor").map(_.asString().getValue).getOrElse("")
           val colorBadge: Modifier = if (isAutoReload && reloadColor.nonEmpty) {
             tag("span")(cls := "badge bg-secondary ms-2")(reloadColor.capitalize)
@@ -74,6 +79,14 @@ object RepertoireRoutes extends BaseRoutes {
                 if (isAutoReload) {
                   button(cls := "btn btn-sm btn-outline-warning ms-2", onclick := s"reloadRepertoire('$id')")("Reload")
                 } else frag(),
+                if (isPublic) {
+                  frag(
+                    button(cls := "btn btn-sm btn-outline-success ms-2", onclick := s"toggleRepertoirePublic('$id', false)")(i(cls := "bi bi-globe me-1"), "Public"),
+                    a(href := s"/repertoire-viewer/$id", cls := "btn btn-sm btn-outline-light ms-2", target := "_blank")(i(cls := "bi bi-eye me-1"), "View")
+                  )
+                } else {
+                  button(cls := "btn btn-sm btn-outline-secondary ms-2", onclick := s"toggleRepertoirePublic('$id', true)")(i(cls := "bi bi-lock me-1"), "Private")
+                },
                 button(cls := "btn btn-sm btn-outline-danger ms-2", onclick := s"deleteRepertoire('$id')")("Delete")
               )
             )
@@ -118,6 +131,32 @@ object RepertoireRoutes extends BaseRoutes {
             )
           )
         )
+      ),
+
+      // Import KIF Modal
+      div(cls := "modal fade", id := "importKifModal", tabindex := "-1")(
+        div(cls := "modal-dialog")(
+          div(cls := "modal-content bg-dark text-light border-secondary")(
+            div(cls := "modal-header")(
+              h5(cls := "modal-title")("Import Repertoire from KIF"),
+              button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
+            ),
+            div(cls := "modal-body")(
+              div(cls := "mb-3")(
+                label(cls := "form-label")("KIF File"),
+                input(`type` := "file", id := "kifFile", cls := "form-control bg-dark text-light border-secondary", attr("accept") := ".kif,.kifu")
+              ),
+              div(cls := "mb-3")(
+                label(cls := "form-label")("Repertoire Name"),
+                input(`type` := "text", id := "kifRepertoireName", cls := "form-control bg-dark text-light border-secondary", placeholder := "Auto-filled from filename")
+              )
+            ),
+            div(cls := "modal-footer")(
+              button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
+              button(`type` := "button", cls := "btn btn-success", onclick := "importKifRepertoire()")("Import")
+            )
+          )
+        )
       )
     )
   }
@@ -139,6 +178,77 @@ object RepertoireRoutes extends BaseRoutes {
         case e: Exception =>
           logger.error("Error creating repertoire", e)
           cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
+    }
+  }
+
+  @cask.post("/repertoire/create-from-kif")
+  def createFromKif(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      try {
+        val json = ujson.read(request.text())
+        val name = json("name").str
+        val kif = json("kif").str
+
+        val (rootSfen, moves) = GameLoader.parseKifTree(kif)
+        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen)), 10.seconds)
+
+        val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
+          prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+        }
+        Await.result(addFuture, 120.seconds)
+
+        logger.info(s"Repertoire created from KIF: id=$id, moves=${moves.size}")
+        cask.Response(
+          ujson.Obj("id" -> id, "moveCount" -> moves.size),
+          headers = Seq("Content-Type" -> "application/json")
+        )
+      } catch {
+        case e: Exception =>
+          logger.error("Error creating repertoire from KIF", e)
+          cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
+    }
+  }
+
+  @cask.post("/repertoire/:id/import-kif")
+  def importKif(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        try {
+          val json = ujson.read(request.text())
+          val kif = json("kif").str
+
+          val (_, moves) = GameLoader.parseKifTree(kif)
+
+          val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
+            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+          }
+          Await.result(addFuture, 120.seconds)
+
+          logger.info(s"Imported ${moves.size} moves from KIF into repertoire $id")
+          cask.Response(
+            ujson.Obj("success" -> true, "importedCount" -> moves.size),
+            headers = Seq("Content-Type" -> "application/json")
+          )
+        } catch {
+          case e: Exception =>
+            logger.error(s"Error importing KIF into repertoire $id", e)
+            cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+        }
+      }
+    }
+  }
+
+  @cask.post("/repertoire/toggle-public")
+  def togglePublic(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      val json = ujson.read(request.text())
+      val id = json("id").str
+      val isPublic = json("isPublic").bool
+      withOwnership(id, email) { _ =>
+        Await.result(RepertoireRepository.toggleRepertoirePublic(id, isPublic), 10.seconds)
+        cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
@@ -341,18 +451,29 @@ object RepertoireRoutes extends BaseRoutes {
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
                     div(cls := "analyse__tools__menu")(
-                      button(cls := "btn btn-sm btn-outline-light me-2", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
+                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
                       button(cls := "btn btn-sm btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
                       div(cls := "ms-auto")(
-                        button(cls := "btn btn-sm btn-outline-success me-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import sequence (e.g. 7g7f 3c3d 2g2f)")(i(cls := "bi bi-download"), " Import"),
-                        button(cls := "btn btn-sm btn-outline-info", onclick := "window.open('https://lishogi.org/analysis/' + currentSfen.replace(/ /g, '_'), '_blank')", title := "Analyze on Lishogi")(i(cls := "bi bi-search"), " Lishogi")
+                        button(cls := "btn btn-sm btn-outline-info", attr("id") := "analyzeBtn", onclick := "analyzePosition()", title := "Analyze position with engine")(i(cls := "bi bi-cpu me-1"), tag("span")(cls := "d-none d-lg-inline")("Analyze"))
                       )
                     ),
+                    div(cls := "analyse__engine-results", attr("id") := "engine-results", style := "display:none;"),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
                         div(attr("id") := "variation-list")(
                           "Loading moves..."
                         )
+                      )
+                    ),
+                    div(cls := "analyse__tools__actions")(
+                      div(cls := "btn-group btn-group-sm w-100")(
+                        button(cls := "btn btn-outline-warning", onclick := "saveDraftPuzzle()", title := "Save current position as draft puzzle")(i(cls := "bi bi-pencil-square me-1"), tag("span")(cls := "d-none d-lg-inline")("Draft")),
+                        button(cls := "btn btn-outline-warning", onclick := "reviewInPuzzleCreator()", title := "Open in Puzzle Creator for review")(i(cls := "bi bi-puzzle me-1"), tag("span")(cls := "d-none d-lg-inline")("Review")),
+                        button(cls := "btn btn-outline-info", onclick := "window.open('https://lishogi.org/analysis/' + currentSfen.replace(/ /g, '_'), '_blank')", title := "Analyze on Lishogi")(i(cls := "bi bi-search me-1"), tag("span")(cls := "d-none d-lg-inline")("Lishogi"))
+                      ),
+                      div(cls := "btn-group btn-group-sm w-100 mt-1")(
+                        button(cls := "btn btn-outline-success", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal", title := "Import moves from KIF file")(i(cls := "bi bi-file-earmark-arrow-up me-1"), tag("span")(cls := "d-none d-lg-inline")("Import KIF")),
+                        button(cls := "btn btn-outline-light", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import USI move sequence")(i(cls := "bi bi-list-ol me-1"), tag("span")(cls := "d-none d-lg-inline")("Import USI"))
                       )
                     )
                   )
@@ -373,14 +494,10 @@ object RepertoireRoutes extends BaseRoutes {
           div(cls := "modal-dialog")(
             div(cls := "modal-content bg-dark text-light border-secondary")(
               div(cls := "modal-header")(
-                h5(cls := "modal-title", attr("id") := "moveEditModalLabel")("Move Details"),
+                h5(cls := "modal-title", attr("id") := "moveEditModalLabel")("Move Settings"),
                 button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
               ),
               div(cls := "modal-body")(
-                div(cls := "mb-3")(
-                  label(cls := "form-label")("Comment"),
-                  textarea(attr("id") := "moveComment", cls := "form-control bg-dark text-light border-secondary", attr("rows") := "3")
-                ),
                 div(cls := "form-check")(
                   input(`type` := "checkbox", attr("id") := "moveIsPuzzle", cls := "form-check-input"),
                   label(cls := "form-check-label", attr("for") := "moveIsPuzzle")("Suitable for puzzle")
@@ -389,6 +506,29 @@ object RepertoireRoutes extends BaseRoutes {
               div(cls := "modal-footer")(
                 button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
                 button(`type` := "button", cls := "btn btn-primary", onclick := "saveMoveDetails()")("Save")
+              )
+            )
+          )
+        ),
+
+        // Import KIF Modal
+        div(cls := "modal fade", attr("id") := "importKifModal", attr("tabindex") := "-1")(
+          div(cls := "modal-dialog")(
+            div(cls := "modal-content bg-dark text-light border-secondary")(
+              div(cls := "modal-header")(
+                h5(cls := "modal-title")("Import KIF File"),
+                button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
+              ),
+              div(cls := "modal-body")(
+                div(cls := "mb-3")(
+                  label(cls := "form-label")("KIF File"),
+                  input(`type` := "file", attr("id") := "kifFileInput", cls := "form-control bg-dark text-light border-secondary", attr("accept") := ".kif,.kifu")
+                ),
+                p(cls := "text-muted small")("Moves and variations from the KIF file will be merged into this repertoire.")
+              ),
+              div(cls := "modal-footer")(
+                button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
+                button(`type` := "button", cls := "btn btn-success", onclick := "importKifFile()")("Import")
               )
             )
           )

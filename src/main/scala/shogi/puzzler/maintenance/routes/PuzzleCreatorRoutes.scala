@@ -2,7 +2,7 @@ package shogi.puzzler.maintenance.routes
 
 import scalatags.Text.all._
 import shogi.Color
-import shogi.puzzler.db.{AppSettings, GameRepository, CustomPuzzleRepository, SettingsRepository}
+import shogi.puzzler.db.{AppSettings, GameRepository, PuzzleRepository, SettingsRepository}
 import shogi.puzzler.domain.{CpScore, MateScore, PovScore, Score}
 import shogi.puzzler.engine.{EngineManager, Limit}
 import shogi.puzzler.analysis.{AnalysisService, SfenUtils}
@@ -23,15 +23,15 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
       val puzzles = game match {
         case Some(hash) if hash.nonEmpty =>
-          Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+          Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
         case _ =>
           status match {
             case Some("review") =>
-              Await.result(CustomPuzzleRepository.getCustomPuzzlesByStatus(email, "review"), 10.seconds)
+              Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds)
             case Some("accepted") =>
-              Await.result(CustomPuzzleRepository.getAcceptedCustomPuzzles(email), 10.seconds)
+              Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
             case _ =>
-              Await.result(CustomPuzzleRepository.getCustomPuzzles(email), 10.seconds)
+              Await.result(PuzzleRepository.getUserPuzzles(email), 10.seconds)
           }
       }
       val gameInfo = game.filter(_.nonEmpty).flatMap { hash =>
@@ -40,7 +40,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       // Count review puzzles for badge
       val reviewCount = game match {
         case Some(_) => 0L
-        case _ => Await.result(CustomPuzzleRepository.getCustomPuzzlesByStatus(email, "review"), 10.seconds).size.toLong
+        case _ => Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds).size.toLong
       }
       cask.Response(
         renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, status, reviewCount).render,
@@ -66,7 +66,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
-      val puzzle = Await.result(CustomPuzzleRepository.getCustomPuzzle(id, email), 10.seconds)
+      val puzzle = Await.result(PuzzleRepository.getPuzzle(id, email), 10.seconds)
       puzzle match {
         case Some(doc) =>
           cask.Response(
@@ -396,9 +396,14 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                   )
                 ),
                 div(cls := "row g-2 mb-3")(
-                  div(cls := "col-12")(
+                  div(cls := "col-6")(
                     button(cls := "btn btn-success w-100", id := "save-puzzle")(
-                      i(cls := "bi bi-save me-2"), "Save Puzzle"
+                      i(cls := "bi bi-save me-2"), "Save"
+                    )
+                  ),
+                  div(cls := "col-6")(
+                    button(cls := "btn btn-outline-warning w-100", id := "save-draft")(
+                      i(cls := "bi bi-pencil-square me-2"), "Save as Draft"
                     )
                   )
                 ),
@@ -507,9 +512,9 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuthJson(request, "puzzle-creator") { email =>
       val puzzles = game match {
         case Some(hash) if hash.nonEmpty =>
-          Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+          Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
         case _ =>
-          Await.result(CustomPuzzleRepository.getCustomPuzzles(email), 10.seconds)
+          Await.result(PuzzleRepository.getUserPuzzles(email), 10.seconds)
       }
 
       val jsonArray = puzzles.map { doc =>
@@ -547,16 +552,17 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val tags = json.obj.get("tags").map { t =>
         t.arr.map(_.str).toSeq
       }
-      val blunderAnalyses = json.obj.get("blunderAnalyses").map(_.str)
+      val blunderAnalyses = json.obj.get("blunderAnalyses").flatMap(v => if (v.isNull) None else Some(v.str))
       val id = json.obj.get("id").map(_.str)
+      val status = json.obj.get("status").map(_.str).getOrElse("accepted")
 
       val result = id match {
         case Some(puzzleId) =>
-          Await.result(CustomPuzzleRepository.updateCustomPuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses), 10.seconds)
+          Await.result(PuzzleRepository.updatePuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(CustomPuzzleRepository.saveCustomPuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, tags = tags, blunderAnalyses = blunderAnalyses), 10.seconds)
-          ujson.Obj("success" -> true, "message" -> "Puzzle saved successfully")
+          Await.result(PuzzleRepository.savePuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, status = status, tags = tags, blunderAnalyses = blunderAnalyses), 10.seconds)
+          ujson.Obj("success" -> true, "message" -> (if (status == "review") "Puzzle saved as draft" else "Puzzle saved successfully"))
       }
       
       cask.Response(result, headers = Seq("Content-Type" -> "application/json"))
@@ -569,7 +575,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val json = ujson.read(request.text())
       val id = json("id").str
 
-      Await.result(CustomPuzzleRepository.deleteCustomPuzzle(id, email), 10.seconds)
+      Await.result(PuzzleRepository.deletePuzzle(id, email), 10.seconds)
       cask.Response(
         ujson.Obj("success" -> true, "message" -> "Puzzle deleted successfully"),
         headers = Seq("Content-Type" -> "application/json")
@@ -583,7 +589,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val json = ujson.read(request.text())
       val id = json("id").str
 
-      Await.result(CustomPuzzleRepository.updateCustomPuzzleStatus(id, email, "accepted"), 10.seconds)
+      Await.result(PuzzleRepository.updatePuzzleStatus(id, email, "accepted"), 10.seconds)
       cask.Response(
         ujson.Obj("success" -> true, "message" -> "Puzzle accepted"),
         headers = Seq("Content-Type" -> "application/json")

@@ -69,8 +69,8 @@ function loadNextPuzzle() {
             $('#card-info').show();
 
             // Update turn and players
-            if (currentPuzzle.is_custom_puzzle && currentPuzzle.custom_puzzle_name) {
-                $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + currentPuzzle.custom_puzzle_name);
+            if (currentPuzzle.is_puzzle && currentPuzzle.puzzle_name) {
+                $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + currentPuzzle.puzzle_name);
             } else {
                 $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (currentPuzzle.sente || "?") + " vs " + (currentPuzzle.gote || "?"));
             }

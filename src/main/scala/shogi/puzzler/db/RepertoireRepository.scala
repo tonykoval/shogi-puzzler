@@ -4,6 +4,7 @@ import org.mongodb.scala._
 import org.mongodb.scala.model.Filters._
 import org.mongodb.scala.model.Updates._
 import org.mongodb.scala.model.Filters.exists
+import org.mongodb.scala.model.Projections._
 import org.mongodb.scala.bson.BsonArray
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -31,9 +32,11 @@ object RepertoireRepository {
     collection.find(equal("_id", new ObjectId(id))).headOption()
   }
 
-  def createRepertoire(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None): Future[String] = {
+  def createRepertoire(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None, rootSfen: Option[String] = None): Future[String] = {
     logger.info(s"Creating repertoire: name=$name, ownerEmail=$ownerEmail, isAutoReload=$isAutoReload, reloadThreshold=$reloadThreshold, reloadColor=$reloadColor")
-    val sfen = scala.util.Try(shogi.variant.Standard.initialSfen.value).getOrElse("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+    val sfen = rootSfen.getOrElse(
+      scala.util.Try(shogi.variant.Standard.initialSfen.value).getOrElse("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
+    )
     val doc = Document(
       "name" -> name,
       "rootSfen" -> sfen,
@@ -187,6 +190,24 @@ object RepertoireRepository {
       equal("_id", new ObjectId(id)),
       set("nodes", Document())
     ).toFuture().map(_ => ())
+  }
+
+  def toggleRepertoirePublic(id: String, isPublic: Boolean): Future[Unit] = {
+    logger.info(s"Setting repertoire $id is_public=$isPublic")
+    collection.updateOne(
+      equal("_id", new ObjectId(id)),
+      set("is_public", isPublic)
+    ).toFuture().map(_ => ())
+  }
+
+  def getPublicRepertoires(): Future[Seq[Document]] = {
+    collection.find(equal("is_public", true))
+      .projection(exclude("nodes"))
+      .toFuture()
+  }
+
+  def getPublicRepertoire(id: String): Future[Option[Document]] = {
+    collection.find(and(equal("_id", new ObjectId(id)), equal("is_public", true))).headOption()
   }
 
   def addMoves(repertoireId: String, parentSfen: String, moves: Seq[(String, String)]): Future[Unit] = {

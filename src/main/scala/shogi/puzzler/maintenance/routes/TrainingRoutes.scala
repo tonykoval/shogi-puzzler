@@ -2,7 +2,7 @@ package shogi.puzzler.maintenance.routes
 
 import cask._
 import scalatags.Text.all._
-import shogi.puzzler.db.{SRSRepository, CustomPuzzleRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.db.{SRSRepository, PuzzleRepository, SettingsRepository, AppSettings}
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -33,8 +33,8 @@ object TrainingRoutes extends BaseRoutes {
             case Some(puzzleDoc) =>
               val puzzleJson = ujson.read(puzzleDoc.toJson())
               // For custom puzzles, convert to viewer format
-              val viewerJson = if (source == "custom_puzzles") {
-                val converted = CustomPuzzleRepository.convertCustomPuzzleToViewerFormat(puzzleDoc)
+              val viewerJson = if (source == "custom_puzzles" || source == "puzzles") {
+                val converted = PuzzleRepository.convertToViewerFormat(puzzleDoc)
                 ujson.read(converted.toJson())
               } else puzzleJson
 

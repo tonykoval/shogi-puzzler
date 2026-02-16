@@ -11,9 +11,10 @@ object UserManagementRoutes extends BaseRoutes {
   private val allAvailablePages = Seq(
     "*" -> "All Pages",
     "my-games" -> "My Games",
-    "repertoire" -> "Repertoire",
+    "repertoire" -> "Rep. Editor",
     "viewer" -> "Puzzles",
     "puzzle-creator" -> "Puzzle Editor",
+    "training" -> "Training",
     "config" -> "Configuration",
     "ocr" -> "OCR Library",
     "admin/users" -> "User Management"

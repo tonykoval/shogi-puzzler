@@ -6,6 +6,25 @@ let history = [];
 const repertoireId = document.getElementById('repertoireId').value;
 
 let editingMove = null; // { parentSfen, usi, comment, isPuzzle }
+let engineArrowsActive = false;
+let editingCommentUsi = null;
+
+function formatMoveText(usi, pos) {
+    const parsed = Shogiops.parseUsi(usi);
+    if (!parsed) return usi;
+
+    if (parsed.role) {
+        const roleForsyth = Shogiops.sfen.roleToForsyth("standard")(parsed.role);
+        return (roleForsyth ? (roleForsyth.startsWith('+') ? roleForsyth[1].toUpperCase() + '+' : roleForsyth.toUpperCase()) : parsed.role[0].toUpperCase()) + '*' + Shogiops.makeSquare(parsed.to);
+    } else {
+        const piece = pos.board.get(parsed.from);
+        if (piece) {
+            const roleForsyth = Shogiops.sfen.roleToForsyth("standard")(piece.role);
+            return (roleForsyth ? (roleForsyth.startsWith('+') ? roleForsyth[1].toUpperCase() + '+' : roleForsyth.toUpperCase()) : piece.role[0].toUpperCase()) + Shogiops.makeSquare(parsed.from) + (parsed.promotion ? 'x' : '-') + Shogiops.makeSquare(parsed.to);
+        }
+    }
+    return usi;
+}
 
 async function loadRepertoire(lastMoveUsi) {
     const response = await fetch(`/repertoire/${repertoireId}/json`);
@@ -16,12 +35,13 @@ async function loadRepertoire(lastMoveUsi) {
     renderBoard(lastMoveUsi);
     renderVariations();
     updateMenuState();
+    displayMoveArrows();
 }
 
 function updateMenuState() {
     const revertBtn = document.querySelector('button[onclick="revertMove()"]');
     const toRootBtn = document.querySelector('button[onclick="toRoot()"]');
-    
+
     if (revertBtn) revertBtn.disabled = history.length === 0;
     if (toRootBtn) toRootBtn.disabled = currentSfen === repertoire.rootSfen;
 }
@@ -29,7 +49,7 @@ function updateMenuState() {
 function renderBoard(lastMoveUsi) {
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
     const hands = currentSfen.split(' ')[2];
-    
+
     let lastDests = [];
     let lastPiece = undefined;
     if (lastMoveUsi) {
@@ -149,6 +169,8 @@ async function handleMove(moveData) {
             throw new Error('Failed to save move');
         }
 
+        clearEngineAnalysis();
+        editingCommentUsi = null;
         history.push(currentSfen);
         currentSfen = nextSfen;
         await loadRepertoire(usi);
@@ -201,7 +223,7 @@ function formatComment(comment) {
             cls = "text-info";
             icon = '<i class="bi bi-3-circle me-1"></i>';
         }
-        
+
         if (cls) {
             return `<p class="${cls} mb-1"><b>${icon}${line}</b></p>`;
         }
@@ -209,19 +231,49 @@ function formatComment(comment) {
     }).join("");
 }
 
+function displayMoveArrows() {
+    if (engineArrowsActive || !sg) return;
+    if (!repertoire || !repertoire.nodes) {
+        sg.setAutoShapes([]);
+        return;
+    }
+
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+
+    const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
+    const brushes = ['green', 'blue', 'yellow', 'red'];
+    const shapes = [];
+
+    node.moves.forEach((move, index) => {
+        const brush = brushes[Math.min(index, brushes.length - 1)];
+        const parsed = Shogiops.parseUsi(move.usi);
+        if (parsed) {
+            if (parsed.role) {
+                // Drop — piece descriptor as origin, like puzzle hints
+                shapes.push({ orig: { role: parsed.role, color: pos.turn }, dest: Shogiops.makeSquare(parsed.to), brush });
+            } else {
+                shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
+            }
+        }
+    });
+
+    sg.setAutoShapes(shapes);
+}
+
 function renderVariations() {
     const container = document.getElementById('variation-list');
     container.innerHTML = '';
-    
+
     const nodeKey = sanitizeSfen(currentSfen);
     const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
-    
+
     if (node.moves.length === 0) {
         container.innerHTML = '<div class="text-muted p-2">No moves here yet. Play a move on the board to add one.</div>';
     } else {
         const moveList = document.createElement('div');
         moveList.className = 'moves';
-        
+
         const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
 
         node.moves.forEach(move => {
@@ -229,32 +281,21 @@ function renderVariations() {
             moveRow.className = 'mb-3 border-bottom border-secondary pb-2';
 
             const moveElem = document.createElement('move');
-            const parsedMove = Shogiops.parseUsi(move.usi);
-            let moveText = move.usi;
-            
-            if (parsedMove) {
-                if (parsedMove.role) {
-                    const roleForsyth = Shogiops.sfen.roleToForsyth("standard")(parsedMove.role);
-                    moveText = (roleForsyth ? (roleForsyth.startsWith('+') ? roleForsyth[1].toUpperCase() + '+' : roleForsyth.toUpperCase()) : parsedMove.role[0].toUpperCase()) + '*' + Shogiops.makeSquare(parsedMove.to);
-                } else {
-                    const piece = pos.board.get(parsedMove.from);
-                    if (piece) {
-                        const roleForsyth = Shogiops.sfen.roleToForsyth("standard")(piece.role);
-                        moveText = (roleForsyth ? (roleForsyth.startsWith('+') ? roleForsyth[1].toUpperCase() + '+' : roleForsyth.toUpperCase()) : piece.role[0].toUpperCase()) + Shogiops.makeSquare(parsedMove.from) + (parsedMove.promotion ? 'x' : '-') + Shogiops.makeSquare(parsedMove.to);
-                    }
-                }
-            }
+            const moveText = formatMoveText(move.usi, pos);
 
             moveElem.innerText = moveText;
             moveElem.className = 'btn btn-sm btn-outline-light me-1 mb-1';
             moveElem.onclick = () => {
+                clearEngineAnalysis();
+                editingCommentUsi = null;
                 history.push(currentSfen);
                 currentSfen = move.nextSfen;
                 renderBoard(move.usi);
                 renderVariations();
                 updateMenuState();
+                displayMoveArrows();
             };
-            
+
             const moveActionWrapper = document.createElement('div');
             moveActionWrapper.className = 'd-inline-flex align-items-center me-2';
             moveActionWrapper.appendChild(moveElem);
@@ -276,7 +317,7 @@ function renderVariations() {
             editBtn.className = 'btn btn-sm btn-outline-warning p-1 ms-1';
             editBtn.style.lineHeight = '1';
             editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
-            editBtn.title = 'Edit move details';
+            editBtn.title = 'Toggle puzzle flag';
             editBtn.onclick = (e) => {
                 e.stopPropagation();
                 openMoveEditModal(currentSfen, move);
@@ -303,16 +344,89 @@ function renderVariations() {
 
             moveRow.appendChild(moveActionWrapper);
 
-            if (move.comment) {
-                const commentDiv = document.createElement('div');
-                commentDiv.className = 'move-comment mt-1 small text-info';
-                commentDiv.innerHTML = formatComment(move.comment);
-                moveRow.appendChild(commentDiv);
+            // Inline comment section
+            const commentContainer = document.createElement('div');
+            commentContainer.className = 'mt-1';
+
+            if (editingCommentUsi === move.usi) {
+                const textarea = document.createElement('textarea');
+                textarea.className = 'form-control form-control-sm bg-dark text-light border-secondary';
+                textarea.rows = 3;
+                textarea.value = move.comment || '';
+                textarea.id = 'inline-comment-textarea';
+                commentContainer.appendChild(textarea);
+
+                const btnGroup = document.createElement('div');
+                btnGroup.className = 'mt-1';
+
+                const saveBtn = document.createElement('button');
+                saveBtn.className = 'btn btn-sm btn-success me-1';
+                saveBtn.textContent = 'Save';
+                saveBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    saveMoveComment(currentSfen, move.usi, move.isPuzzle);
+                };
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'btn btn-sm btn-secondary';
+                cancelBtn.textContent = 'Cancel';
+                cancelBtn.onclick = (e) => {
+                    e.stopPropagation();
+                    editingCommentUsi = null;
+                    renderVariations();
+                    displayMoveArrows();
+                };
+
+                btnGroup.appendChild(saveBtn);
+                btnGroup.appendChild(cancelBtn);
+                commentContainer.appendChild(btnGroup);
+            } else {
+                if (move.comment) {
+                    const commentDiv = document.createElement('div');
+                    commentDiv.className = 'move-comment-inline small text-info';
+                    commentDiv.innerHTML = formatComment(move.comment);
+
+                    const editIcon = document.createElement('i');
+                    editIcon.className = 'bi bi-pencil ms-2 text-muted';
+                    editIcon.style.cursor = 'pointer';
+                    editIcon.style.fontSize = '0.85em';
+                    editIcon.title = 'Edit comment';
+                    editIcon.onclick = (e) => {
+                        e.stopPropagation();
+                        editingCommentUsi = move.usi;
+                        renderVariations();
+                        displayMoveArrows();
+                        setTimeout(() => {
+                            const ta = document.getElementById('inline-comment-textarea');
+                            if (ta) ta.focus();
+                        }, 0);
+                    };
+                    commentDiv.appendChild(editIcon);
+                    commentContainer.appendChild(commentDiv);
+                } else {
+                    const addLink = document.createElement('a');
+                    addLink.className = 'small text-muted';
+                    addLink.href = '#';
+                    addLink.textContent = '+ Add comment';
+                    addLink.onclick = (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        editingCommentUsi = move.usi;
+                        renderVariations();
+                        displayMoveArrows();
+                        setTimeout(() => {
+                            const ta = document.getElementById('inline-comment-textarea');
+                            if (ta) ta.focus();
+                        }, 0);
+                    };
+                    commentContainer.appendChild(addLink);
+                }
             }
 
+            moveRow.appendChild(commentContainer);
             moveList.appendChild(moveRow);
         });
-        
+
         container.appendChild(moveList);
     }
 }
@@ -324,20 +438,18 @@ function openMoveEditModal(parentSfen, move) {
         comment: move.comment || '',
         isPuzzle: !!move.isPuzzle
     };
-    
-    document.getElementById('moveComment').value = editingMove.comment;
+
     document.getElementById('moveIsPuzzle').checked = editingMove.isPuzzle;
-    
+
     const modal = new bootstrap.Modal(document.getElementById('moveEditModal'));
     modal.show();
 }
 
 async function saveMoveDetails() {
     if (!editingMove) return;
-    
-    const comment = document.getElementById('moveComment').value;
+
     const isPuzzle = document.getElementById('moveIsPuzzle').checked;
-    
+
     try {
         const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
             method: 'POST',
@@ -345,7 +457,7 @@ async function saveMoveDetails() {
             body: JSON.stringify({
                 parentSfen: editingMove.parentSfen,
                 usi: editingMove.usi,
-                comment: comment,
+                comment: editingMove.comment,
                 isPuzzle: isPuzzle
             })
         });
@@ -357,7 +469,7 @@ async function saveMoveDetails() {
         const modalElement = document.getElementById('moveEditModal');
         const modal = bootstrap.Modal.getInstance(modalElement);
         modal.hide();
-        
+
         await loadRepertoire();
     } catch (e) {
         console.error('Error updating move:', e);
@@ -365,28 +477,221 @@ async function saveMoveDetails() {
     }
 }
 
+async function saveMoveComment(parentSfen, usi, isPuzzle) {
+    const textarea = document.getElementById('inline-comment-textarea');
+    if (!textarea) return;
+
+    const comment = textarea.value;
+
+    try {
+        const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parentSfen: parentSfen,
+                usi: usi,
+                comment: comment,
+                isPuzzle: isPuzzle
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to update comment');
+
+        editingCommentUsi = null;
+        await loadRepertoire();
+    } catch (e) {
+        console.error('Error saving comment:', e);
+        alert('Error: ' + e.message);
+    }
+}
+
+// Engine analysis
+
+async function analyzePosition() {
+    const btn = document.getElementById('analyzeBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i><span class="d-none d-lg-inline">Analyzing...</span>';
+    }
+
+    try {
+        const response = await fetch('/puzzle-creator/analyze', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ sfen: currentSfen, depth: 15, multiPv: 3 })
+        });
+
+        if (!response.ok) throw new Error('Analysis failed');
+
+        const data = await response.json();
+        if (data.success) {
+            displayEngineResults(data.moves);
+        } else {
+            throw new Error(data.error || 'Analysis failed');
+        }
+    } catch (e) {
+        console.error('Engine analysis error:', e);
+        alert('Analysis failed: ' + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-cpu me-1"></i><span class="d-none d-lg-inline">Analyze</span>';
+        }
+    }
+}
+
+function displayEngineResults(moves) {
+    engineArrowsActive = true;
+
+    // Draw engine arrows
+    const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
+    const brushes = ['green', 'blue', 'yellow'];
+    const shapes = [];
+    moves.forEach((move, index) => {
+        const brush = brushes[Math.min(index, brushes.length - 1)];
+        const parsed = Shogiops.parseUsi(move.usi);
+        if (parsed) {
+            if (parsed.role) {
+                shapes.push({ orig: { role: parsed.role, color: pos.turn }, dest: Shogiops.makeSquare(parsed.to), brush });
+            } else {
+                shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
+            }
+        }
+    });
+    sg.setAutoShapes(shapes);
+
+    // Show results panel
+    const panel = document.getElementById('engine-results');
+    if (!panel) return;
+    panel.style.display = 'block';
+    panel.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'd-flex justify-content-between align-items-center mb-2';
+    header.innerHTML = '<span class="text-muted small fw-bold">Engine Analysis</span>';
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'btn btn-sm btn-outline-secondary p-0 px-1';
+    closeBtn.innerHTML = '<i class="bi bi-x"></i>';
+    closeBtn.onclick = clearEngineAnalysis;
+    header.appendChild(closeBtn);
+    panel.appendChild(header);
+
+    const colorIndicators = ['text-success', 'text-primary', 'text-warning'];
+
+    moves.forEach((move, index) => {
+        const score = move.score;
+        let scoreText;
+        if (score.kind === 'mate') {
+            scoreText = score.value > 0 ? `#${score.value}` : `#${score.value}`;
+        } else {
+            scoreText = score.value >= 0 ? `+${score.value}` : `${score.value}`;
+        }
+
+        const moveText = formatMoveText(move.usi, pos);
+        const colorCls = colorIndicators[Math.min(index, colorIndicators.length - 1)];
+
+        const row = document.createElement('div');
+        row.className = 'analyse__engine-result d-flex align-items-center justify-content-between py-1';
+
+        const moveInfo = document.createElement('span');
+        moveInfo.innerHTML = `<i class="bi bi-circle-fill ${colorCls} me-1" style="font-size:0.5em;vertical-align:middle"></i><span class="text-light">${moveText}</span> <span class="text-muted small ms-1">${scoreText}</span>`;
+
+        const addBtn = document.createElement('button');
+        addBtn.className = 'btn btn-sm btn-outline-info p-0 px-1';
+        addBtn.style.lineHeight = '1';
+        addBtn.innerHTML = '<i class="bi bi-chat-dots"></i>';
+        addBtn.title = 'Add eval as comment';
+        addBtn.onclick = () => addEngineEvalAsComment(move);
+
+        row.appendChild(moveInfo);
+        row.appendChild(addBtn);
+        panel.appendChild(row);
+    });
+}
+
+function clearEngineAnalysis() {
+    engineArrowsActive = false;
+    const panel = document.getElementById('engine-results');
+    if (panel) {
+        panel.style.display = 'none';
+        panel.innerHTML = '';
+    }
+    displayMoveArrows();
+}
+
+async function addEngineEvalAsComment(engineMove) {
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const matchingMove = node.moves.find(m => m.usi === engineMove.usi);
+
+    if (!matchingMove) {
+        alert('This move is not in the repertoire at this position.');
+        return;
+    }
+
+    const score = engineMove.score;
+    let evalText;
+    if (score.kind === 'mate') {
+        evalText = `Mate in ${score.value}`;
+    } else {
+        evalText = score.value >= 0 ? `+${score.value}` : `${score.value}`;
+    }
+
+    const evalLine = `Engine: ${evalText} (d${engineMove.depth})`;
+    const newComment = matchingMove.comment
+        ? `${matchingMove.comment}\n${evalLine}`
+        : evalLine;
+
+    try {
+        const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parentSfen: currentSfen,
+                usi: engineMove.usi,
+                comment: newComment,
+                isPuzzle: matchingMove.isPuzzle || false
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to update');
+        await loadRepertoire();
+    } catch (e) {
+        console.error('Error adding eval comment:', e);
+        alert('Error: ' + e.message);
+    }
+}
+
 export function revertMove() {
     if (history.length > 0) {
+        clearEngineAnalysis();
+        editingCommentUsi = null;
         currentSfen = history.pop();
         renderBoard();
         renderVariations();
         updateMenuState();
+        displayMoveArrows();
     }
 }
 
 export function toRoot() {
     if (currentSfen !== repertoire.rootSfen) {
+        clearEngineAnalysis();
+        editingCommentUsi = null;
         history = [];
         currentSfen = repertoire.rootSfen;
         renderBoard();
         renderVariations();
         updateMenuState();
+        displayMoveArrows();
     }
 }
 
 window.revertMove = revertMove;
 window.toRoot = toRoot;
 window.saveMoveDetails = saveMoveDetails;
+window.analyzePosition = analyzePosition;
+window.clearEngineAnalysis = clearEngineAnalysis;
 
 async function importMoves() {
     const usis = document.getElementById('importUsis').value;
@@ -413,7 +718,7 @@ async function importMoves() {
 
         const result = await response.json();
         alert(`Successfully imported ${result.importedCount} moves.`);
-        
+
         // Reset form fields
         document.getElementById('importUsis').value = '';
         document.getElementById('importComment').value = '';
@@ -422,7 +727,7 @@ async function importMoves() {
         const modalElement = document.getElementById('importMovesModal');
         const modal = bootstrap.Modal.getInstance(modalElement);
         if (modal) modal.hide();
-        
+
         await loadRepertoire();
     } catch (e) {
         console.error('Error importing moves:', e);
@@ -431,6 +736,130 @@ async function importMoves() {
 }
 
 window.importMoves = importMoves;
+
+async function importKifFile() {
+    const fileInput = document.getElementById('kifFileInput');
+
+    if (!fileInput.files || !fileInput.files[0]) {
+        alert('Please select a KIF file.');
+        return;
+    }
+
+    const file = fileInput.files[0];
+
+    readKifFile(file, async function(kif) {
+        const btn = document.querySelector('#importKifModal .btn-success');
+        const originalText = btn.innerText;
+        btn.disabled = true;
+        btn.innerText = 'Importing...';
+
+        try {
+            const response = await fetch(`/repertoire/${repertoireId}/import-kif`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kif })
+            });
+
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || 'Failed to import');
+            }
+
+            const result = await response.json();
+            alert(`Successfully imported ${result.importedCount} moves.`);
+
+            const modalElement = document.getElementById('importKifModal');
+            const modal = bootstrap.Modal.getInstance(modalElement);
+            if (modal) modal.hide();
+
+            await loadRepertoire();
+        } catch (e) {
+            console.error('Error importing KIF:', e);
+            alert('Error: ' + e.message);
+            btn.disabled = false;
+            btn.innerText = originalText;
+        }
+    });
+}
+
+function readKifFile(file, callback) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const buffer = e.target.result;
+        const utf8Text = new TextDecoder('utf-8').decode(buffer);
+        if (!utf8Text.includes('\uFFFD')) {
+            callback(utf8Text);
+            return;
+        }
+        const sjisText = new TextDecoder('shift-jis').decode(buffer);
+        callback(sjisText);
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+window.importKifFile = importKifFile;
+
+function reviewInPuzzleCreator() {
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const puzzleMove = node.moves.find(m => m.isPuzzle);
+
+    const params = new URLSearchParams();
+    params.set('sfen', currentSfen);
+    if (puzzleMove) {
+        params.set('blunder', puzzleMove.usi);
+        if (puzzleMove.comment) {
+            params.set('comment', puzzleMove.comment);
+        }
+    }
+    window.open(`/puzzle-creator/new?${params.toString()}`, '_blank');
+
+    if (puzzleMove) {
+        clearAndAdvancePuzzle(currentSfen, puzzleMove);
+    }
+}
+
+window.reviewInPuzzleCreator = reviewInPuzzleCreator;
+
+async function saveDraftPuzzle() {
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const puzzleMove = node.moves.find(m => m.isPuzzle);
+
+    const data = {
+        name: puzzleMove && puzzleMove.comment ? puzzleMove.comment : `Draft from ${repertoire.name}`,
+        sfen: currentSfen,
+        status: 'review',
+        blunderMoves: puzzleMove ? [puzzleMove.usi] : [],
+        comments: '',
+        isPublic: false,
+        tags: [],
+    };
+
+    try {
+        const response = await fetch('/puzzle-creator/save', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error || 'Failed to save draft');
+        }
+
+        alert('Draft puzzle saved! Find it in Puzzle Editor → Needs Review.');
+
+        if (puzzleMove) {
+            clearAndAdvancePuzzle(currentSfen, puzzleMove);
+        }
+    } catch (e) {
+        console.error('Error saving draft puzzle:', e);
+        alert('Error: ' + e.message);
+    }
+}
+
+window.saveDraftPuzzle = saveDraftPuzzle;
 
 function sendToPuzzleCreator(parentSfen, move) {
     const params = new URLSearchParams();
@@ -461,6 +890,9 @@ async function clearAndAdvancePuzzle(parentSfen, move) {
         const response = await fetch(`/repertoire/${repertoireId}/json`);
         repertoire = await response.json();
 
+        clearEngineAnalysis();
+        editingCommentUsi = null;
+
         // Find next puzzle move
         const nextPuzzle = findNextPuzzleMove();
         if (nextPuzzle) {
@@ -470,11 +902,13 @@ async function clearAndAdvancePuzzle(parentSfen, move) {
             renderBoard();
             renderVariations();
             updateMenuState();
+            displayMoveArrows();
         } else {
             // No more puzzles, just refresh current view
             renderBoard();
             renderVariations();
             updateMenuState();
+            displayMoveArrows();
         }
     } catch (e) {
         console.error('Error clearing puzzle flag:', e);

@@ -3,7 +3,7 @@ package shogi.puzzler.maintenance
 import org.slf4j.LoggerFactory
 import shogi.Color
 import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor, SfenUtils}
-import shogi.puzzler.db.{AppSettings, GameRepository, CustomPuzzleRepository, SettingsRepository}
+import shogi.puzzler.db.{AppSettings, GameRepository, PuzzleRepository, SettingsRepository}
 import shogi.puzzler.domain.ParsedGame
 import shogi.puzzler.game.GameLoader
 import shogi.puzzler.maintenance.routes.MaintenanceRoutes.getEngineManager
@@ -125,7 +125,7 @@ object AnalysisQueue {
       Await.result(GameRepository.saveScores(kifHash, scores), 10.seconds)
 
       puzzles.foreach { p =>
-        saveAsCustomPuzzle(p, kifHash, userEmail, parsedGame)
+        saveAsPuzzle(p, kifHash, userEmail, parsedGame)
       }
 
       logger.info(s"[AnalysisQueue] Task $taskId complete. ${puzzles.size} puzzles found.")
@@ -140,7 +140,7 @@ object AnalysisQueue {
   private def scoreToJson(score: shogi.puzzler.domain.PovScore): ujson.Obj =
     SfenUtils.scoreToUjson(score)
 
-  private def saveAsCustomPuzzle(puzzle: TacticalPuzzle, kifHash: String, userEmail: Option[String], parsedGame: ParsedGame): Unit = {
+  private def saveAsPuzzle(puzzle: TacticalPuzzle, kifHash: String, userEmail: Option[String], parsedGame: ParsedGame): Unit = {
     val sente = parsedGame.sentePlayerName.getOrElse("Unknown")
     val gote = parsedGame.gotePlayerName.getOrElse("Unknown")
     val name = s"Move ${puzzle.moveNumber}: $sente vs $gote"
@@ -177,7 +177,7 @@ object AnalysisQueue {
     val blunderMoves = if (puzzle.playerBlunderMove.nonEmpty) Some(Seq(puzzle.playerBlunderMove)) else None
 
     Await.result(
-      CustomPuzzleRepository.saveCustomPuzzle(
+      PuzzleRepository.savePuzzle(
         name = name,
         sfen = puzzle.positionSfen,
         userEmail = userEmail.getOrElse(""),

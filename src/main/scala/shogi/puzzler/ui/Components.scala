@@ -91,7 +91,7 @@ object Components {
             } else (),
             if (canAccess("repertoire")) {
               li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/repertoire")(i(cls := "bi bi-book me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Repertoire"), scalatags.Text.all.span(cls := "d-lg-none")("Rep"))
+                a(cls := "nav-link", href := "/repertoire")(i(cls := "bi bi-book me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Rep. Editor"), scalatags.Text.all.span(cls := "d-lg-none")("Rep"))
               )
             } else (),
             if (canAccess("puzzle-creator")) {
@@ -101,6 +101,9 @@ object Components {
             } else (),
             li(cls := "nav-item")(
               a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"), scalatags.Text.all.span(cls := "d-lg-none")("Puzzles"))
+            ),
+            li(cls := "nav-item")(
+              a(cls := "nav-link", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")("Repertoires"), scalatags.Text.all.span(cls := "d-lg-none")("Reps"))
             ),
             if (canAccess("training")) {
               li(cls := "nav-item")(

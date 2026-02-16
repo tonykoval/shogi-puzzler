@@ -207,7 +207,7 @@ function formatPuzzle (state) {
         if (d.avg_rating > 0) indicators += ' <small style="color:#ffc107;">★' + d.avg_rating.toFixed(1) + '</small>';
         if (d.play_count > 0) indicators += ' <small style="color:#888;">▶' + d.play_count + '</small>';
     }
-    if (d && d.is_custom_puzzle) {
+    if (d && d.is_puzzle) {
         return $('<span><i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + state.text + indicators + '</span>');
     } else if (d && (d.sente || d.gote)) {
         return $('<span>' + state.text + ' <small style="color: #888">(' + (d.sente || "?") + ' vs ' + (d.gote || "?") + ')</small>' + indicators + '</span>');
@@ -653,9 +653,9 @@ function createIds(data) {
             let obj = {}
             obj["id"] = index
             let label = value.id
-            if (value.is_custom_puzzle && value.custom_puzzle_name) {
+            if (value.is_puzzle && value.puzzle_name) {
                 // Show custom puzzle name
-                label = value.custom_puzzle_name
+                label = value.puzzle_name
             } else if (value.move_number) {
                 label = "Move " + value.move_number
             } else if (value.ply) {
@@ -1674,7 +1674,7 @@ $('#training-btn').click(function() {
     const puzzleOid = selected._id.$oid;
     const btn = $(this);
     const isInDeck = btn.hasClass('btn-warning');
-    const source = selected.is_custom_puzzle ? 'custom_puzzles' : 'puzzles';
+    const source = selected.is_puzzle ? 'puzzles' : 'puzzles';
 
     btn.prop('disabled', true);
 

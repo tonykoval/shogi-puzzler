@@ -12,8 +12,8 @@ object MongoDBConnection {
   private val database: MongoDatabase = client.getDatabase(config.getString("database"))
   
   val gamesCollection: MongoCollection[Document] = database.getCollection("games")
-  val puzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
-  val customPuzzlesCollection: MongoCollection[Document] = database.getCollection("custom_puzzles")
+  val legacyPuzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
+  val puzzlesCollection: MongoCollection[Document] = database.getCollection("custom_puzzles")
   val settingsCollection: MongoCollection[Document] = database.getCollection("settings")
   val repertoireCollection: MongoCollection[Document] = database.getCollection("repertoire")
   val trainingPiecesCollection: MongoCollection[Document] = database.getCollection("training_pieces")
@@ -53,6 +53,11 @@ object MongoDBConnection {
     org.mongodb.scala.model.Indexes.ascending("image_data"),
     org.mongodb.scala.model.IndexOptions().unique(true)
   ).toFuture().foreach(_ => println("[DB] Unique index on image_data for training_hands created"))(scala.concurrent.ExecutionContext.global)
+
+  // Index on is_public for repertoire collection
+  repertoireCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("is_public")
+  ).toFuture().foreach(_ => println("[DB] Index on is_public for repertoire created"))(scala.concurrent.ExecutionContext.global)
 
   // SRS: unique compound index on (user_email, puzzle_object_id)
   srsCardsCollection.createIndex(

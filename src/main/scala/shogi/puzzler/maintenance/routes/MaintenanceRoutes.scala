@@ -7,7 +7,7 @@ import ujson.Value
 import scalatags.Text.all._
 import scala.concurrent.duration._
 import scala.concurrent.Await
-import shogi.puzzler.db.{GameRepository, PuzzleRepository, CustomPuzzleRepository, SettingsRepository, AppSettings, TrainingRepository, OCRRepository, OCRHistoryEntry}
+import shogi.puzzler.db.{GameRepository, PuzzleRepository, SettingsRepository, AppSettings, TrainingRepository, OCRRepository, OCRHistoryEntry}
 import shogi.puzzler.ui.Components
 import shogi.puzzler.game.{GameLoader, KifAnnotator}
 import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
@@ -1623,8 +1623,8 @@ object MaintenanceRoutes extends BaseRoutes {
   def analysisData(hash: String, request: cask.Request) = {
     withAuthJson(request, "my-games") { _ =>
       val game = Await.result(GameRepository.getGameByHash(hash), 10.seconds)
-      val regularPuzzles = Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
-      val customPuzzles = Await.result(CustomPuzzleRepository.getCustomPuzzlesForGame(hash), 10.seconds)
+      val legacyPuzzles = Await.result(PuzzleRepository.getLegacyPuzzlesForGame(hash), 10.seconds)
+      val puzzles = Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
 
       val scores = game.flatMap(_.get("scores")).map { s =>
         s.asArray().getValues.asScala.map { v =>
@@ -1635,7 +1635,7 @@ object MaintenanceRoutes extends BaseRoutes {
         }.toSeq
       }.getOrElse(Seq.empty)
 
-      val regularPuzzleDetails = regularPuzzles.map { p =>
+      val legacyPuzzleDetails = legacyPuzzles.map { p =>
         val moveNumber = p.get("move_number").map { v =>
           if (v.isInt32) v.asInt32().getValue
           else if (v.isInt64) v.asInt64().getValue.toInt
@@ -1652,7 +1652,7 @@ object MaintenanceRoutes extends BaseRoutes {
         )
       }
 
-      val customPuzzleDetails = customPuzzles.flatMap { p =>
+      val puzzleDetails = puzzles.flatMap { p =>
         val moveNumber = p.get("move_number").map { v =>
           if (v.isInt32) v.asInt32().getValue
           else if (v.isInt64) v.asInt64().getValue.toInt
@@ -1671,7 +1671,7 @@ object MaintenanceRoutes extends BaseRoutes {
         } else None
       }
 
-      val allPuzzleDetails = regularPuzzleDetails ++ customPuzzleDetails
+      val allPuzzleDetails = legacyPuzzleDetails ++ puzzleDetails
 
       cask.Response(ujson.Obj(
         "scores" -> ujson.Arr(scores.map(s => ujson.Num(s.toDouble)): _*),

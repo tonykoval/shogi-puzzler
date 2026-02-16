@@ -3,7 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.Color
-import shogi.puzzler.db.{GameRepository, PuzzleRepository, CustomPuzzleRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.db.{GameRepository, PuzzleRepository, SettingsRepository, AppSettings}
 import shogi.puzzler.ui.Components
 import shogi.puzzler.engine.{EngineManager, Limit}
 import shogi.puzzler.analysis.{AnalysisService, SfenUtils}
@@ -218,16 +218,16 @@ object ViewerRoutes extends BaseRoutes {
         val userPuzzles = Await.result(PuzzleRepository.getPuzzlesForUser(email), 10.seconds)
         logger.info(s"[VIEWER] Found ${userPuzzles.size} puzzles for user $email")
 
-        val customPuzzles = Await.result(CustomPuzzleRepository.getAcceptedCustomPuzzles(email), 10.seconds)
-        logger.info(s"[VIEWER] Found ${customPuzzles.size} custom puzzles for user $email")
+        val acceptedPuzzles = Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
+        logger.info(s"[VIEWER] Found ${acceptedPuzzles.size} accepted puzzles for user $email")
 
-        val convertedCustomPuzzles = customPuzzles.map { doc =>
-          CustomPuzzleRepository.convertCustomPuzzleToViewerFormat(doc)
+        val convertedPuzzles = acceptedPuzzles.map { doc =>
+          PuzzleRepository.convertToViewerFormat(doc)
         }
 
-        userPuzzles ++ convertedCustomPuzzles
+        userPuzzles ++ convertedPuzzles
       case None =>
-        val publicPuzzles = Await.result(CustomPuzzleRepository.getAllPublicPuzzles(), 10.seconds)
+        val publicPuzzles = Await.result(PuzzleRepository.getAllPublicPuzzles(), 10.seconds)
         logger.info(s"[VIEWER] Found ${publicPuzzles.size} public puzzles")
         publicPuzzles
     }

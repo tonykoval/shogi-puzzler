@@ -87,18 +87,117 @@ export function reloadRepertoire(id) {
     });
 }
 
+export function toggleRepertoirePublic(id, isPublic) {
+    fetch('/repertoire/toggle-public', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ id: id, isPublic: isPublic }),
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.json().then(data => {
+                throw new Error(data.error || 'Failed to toggle public');
+            });
+        }
+        return response.json();
+    })
+    .then(() => {
+        window.location.reload();
+    })
+    .catch((error) => {
+        console.error('Error:', error);
+        alert('Failed to toggle public: ' + error.message);
+    });
+}
+
+export function importKifRepertoire() {
+    const fileInput = document.getElementById('kifFile');
+    const nameInput = document.getElementById('kifRepertoireName');
+
+    if (!fileInput.files || !fileInput.files[0]) {
+        alert('Please select a KIF file.');
+        return;
+    }
+
+    const file = fileInput.files[0];
+    const name = nameInput.value || file.name.replace(/\.(kif|kifu)$/i, '');
+
+    if (!name) {
+        alert('Please enter a name for the repertoire.');
+        return;
+    }
+
+    readKifFile(file, function(kif) {
+        const btn = document.querySelector('#importKifModal .btn-success');
+        const originalText = btn.innerText;
+        btn.disabled = true;
+        btn.innerText = 'Importing...';
+
+        fetch('/repertoire/create-from-kif', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, kif })
+        })
+        .then(response => response.json().then(data => {
+            if (!response.ok) throw new Error(data.error || response.statusText);
+            return data;
+        }))
+        .then(data => {
+            alert(`Repertoire created with ${data.moveCount} moves.`);
+            window.location.reload();
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            alert('Failed to import KIF: ' + error.message);
+            btn.disabled = false;
+            btn.innerText = originalText;
+        });
+    });
+}
+
+function readKifFile(file, callback) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const buffer = e.target.result;
+        // Try UTF-8 first
+        const utf8Text = new TextDecoder('utf-8').decode(buffer);
+        if (!utf8Text.includes('\uFFFD')) {
+            callback(utf8Text);
+            return;
+        }
+        // Fallback to Shift-JIS (common for KIF files)
+        const sjisText = new TextDecoder('shift-jis').decode(buffer);
+        callback(sjisText);
+    };
+    reader.readAsArrayBuffer(file);
+}
+
 // Expose to global scope for onclick handlers
 window.createRepertoire = createRepertoire;
 window.deleteRepertoire = deleteRepertoire;
 window.reloadRepertoire = reloadRepertoire;
+window.toggleRepertoirePublic = toggleRepertoirePublic;
+window.importKifRepertoire = importKifRepertoire;
 
 document.addEventListener('DOMContentLoaded', () => {
     const isAutoReloadCheckbox = document.getElementById('isAutoReload');
     const autoReloadSettings = document.getElementById('autoReloadSettings');
-    
+
     if (isAutoReloadCheckbox && autoReloadSettings) {
         isAutoReloadCheckbox.addEventListener('change', () => {
             autoReloadSettings.style.display = isAutoReloadCheckbox.checked ? 'block' : 'none';
+        });
+    }
+
+    const kifFile = document.getElementById('kifFile');
+    if (kifFile) {
+        kifFile.addEventListener('change', () => {
+            const nameInput = document.getElementById('kifRepertoireName');
+            if (nameInput && !nameInput.value && kifFile.files[0]) {
+                nameInput.value = kifFile.files[0].name.replace(/\.(kif|kifu)$/i, '');
+            }
         });
     }
 });

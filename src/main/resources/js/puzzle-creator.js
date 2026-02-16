@@ -347,8 +347,17 @@ function loadPuzzle(puzzle, showToast) {
     }
 }
 
-// Save puzzle
+// Save puzzle as draft (status = "review")
+function saveDraft() {
+    savePuzzleWithStatus('review');
+}
+
+// Save puzzle (status = "accepted")
 function savePuzzle() {
+    savePuzzleWithStatus('accepted');
+}
+
+function savePuzzleWithStatus(status) {
     const name = $('#puzzle-name').val().trim();
     const sfen = $('#puzzle-sfen').val().trim();
     const comments = $('#puzzle-comments').val().trim();
@@ -368,6 +377,7 @@ function savePuzzle() {
         sfen: sfen || '',
         comments: comments || '',
         isPublic: isPublic,
+        status: status,
         moveComments: getAllMoveComments(), // Include move comments
         blunderMoves: blunderMoves, // Include blunder moves
         tags: tags, // Include tags
@@ -1714,14 +1724,31 @@ $(document).ready(function() {
     if (window.__puzzleData) {
         loadPuzzle(window.__puzzleData, false);
     } else {
-        // Initialize board with initial position
-        initBoard();
+        // Check URL params for repertoire review link
+        const urlParams = new URLSearchParams(window.location.search);
+        const sfenParam = urlParams.get('sfen');
+        const blunderParam = urlParams.get('blunder');
+        const commentParam = urlParams.get('comment');
+
+        if (sfenParam) {
+            $('#puzzle-sfen').val(sfenParam);
+            initBoard(sfenParam);
+            if (blunderParam) {
+                blunderMoves = [blunderParam];
+            }
+            if (commentParam) {
+                $('#puzzle-name').val(commentParam);
+            }
+        } else {
+            initBoard();
+        }
         renderBlunderMovesUI();
         renderTagsUI();
     }
 
-    // Save button handler
+    // Save button handlers
     $('#save-puzzle').on('click', savePuzzle);
+    $('#save-draft').on('click', saveDraft);
     
     // Analyze buttons
     $('#analyze-sequence').on('click', function() {

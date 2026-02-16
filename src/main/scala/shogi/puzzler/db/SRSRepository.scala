@@ -13,7 +13,7 @@ object SRSRepository {
   private val cardsCollection = MongoDBConnection.srsCardsCollection
   private val attemptsCollection = MongoDBConnection.srsAttemptsCollection
   private val puzzlesCollection = MongoDBConnection.puzzlesCollection
-  private val customPuzzlesCollection = MongoDBConnection.customPuzzlesCollection
+  private val legacyPuzzlesCollection = MongoDBConnection.legacyPuzzlesCollection
 
   def addCard(email: String, puzzleOid: String, source: String): Future[InsertOneResult] = {
     val now = new Date()
@@ -193,7 +193,9 @@ object SRSRepository {
 
   def getPuzzleData(puzzleOid: String, source: String): Future[Option[Document]] = {
     val oid = new ObjectId(puzzleOid)
-    val collection = if (source == "custom_puzzles") customPuzzlesCollection else puzzlesCollection
-    collection.find(Filters.equal("_id", oid)).first().toFutureOption()
+    puzzlesCollection.find(Filters.equal("_id", oid)).first().toFutureOption().flatMap {
+      case some @ Some(_) => Future.successful(some)
+      case None => legacyPuzzlesCollection.find(Filters.equal("_id", oid)).first().toFutureOption()
+    }
   }
 }

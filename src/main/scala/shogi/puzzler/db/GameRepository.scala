@@ -7,7 +7,6 @@ import scala.concurrent.Future
 object GameRepository {
   private val collection = MongoDBConnection.gamesCollection
   private val puzzlesCollection = MongoDBConnection.puzzlesCollection
-  private val customPuzzlesCollection = MongoDBConnection.customPuzzlesCollection
 
   def saveGame(kif: String, gameDetails: Map[String, String]): Future[InsertOneResult] = {
     val doc = Document(
@@ -121,9 +120,6 @@ object GameRepository {
     import scala.concurrent.ExecutionContext.Implicits.global
     puzzlesCollection.deleteMany(org.mongodb.scala.model.Filters.equal("game_kif_hash", kifHash)).toFuture()
       .flatMap { _ =>
-        customPuzzlesCollection.deleteMany(org.mongodb.scala.model.Filters.equal("game_kif_hash", kifHash)).toFuture()
-      }
-      .flatMap { _ =>
         collection.updateOne(
           org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
           org.mongodb.scala.model.Updates.combine(
@@ -136,13 +132,10 @@ object GameRepository {
 
   def deleteAnalysisKeepAccepted(kifHash: String): Future[UpdateResult] = {
     import scala.concurrent.ExecutionContext.Implicits.global
-    puzzlesCollection.deleteMany(org.mongodb.scala.model.Filters.equal("game_kif_hash", kifHash)).toFuture()
-      .flatMap { _ =>
-        customPuzzlesCollection.deleteMany(org.mongodb.scala.model.Filters.and(
-          org.mongodb.scala.model.Filters.equal("game_kif_hash", kifHash),
-          org.mongodb.scala.model.Filters.equal("status", "review")
-        )).toFuture()
-      }
+    puzzlesCollection.deleteMany(org.mongodb.scala.model.Filters.and(
+        org.mongodb.scala.model.Filters.equal("game_kif_hash", kifHash),
+        org.mongodb.scala.model.Filters.equal("status", "review")
+      )).toFuture()
       .flatMap { _ =>
         collection.updateOne(
           org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
