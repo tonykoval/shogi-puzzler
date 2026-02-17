@@ -8,6 +8,47 @@ const repertoireId = document.getElementById('repertoireId').value;
 let editingMove = null; // { parentSfen, usi, comment, isPuzzle }
 let engineArrowsActive = false;
 let editingCommentUsi = null;
+let lastMoveComment = null;
+
+function parseAnnotations(comment) {
+    if (!comment) return { text: '', shapes: [] };
+
+    const shapes = [];
+    const colorMap = { G: 'green', B: 'blue', R: 'red', Y: 'yellow' };
+
+    // Parse [%cal ...] arrows
+    const calRegex = /\[%cal\s+([^\]]+)\]/g;
+    let match;
+    while ((match = calRegex.exec(comment)) !== null) {
+        match[1].split(',').forEach(token => {
+            token = token.trim();
+            if (token.length >= 5) {
+                const brush = colorMap[token[0]] || 'green';
+                const orig = token[1] + token[2];
+                const dest = token[3] + token[4];
+                shapes.push({ orig, dest, brush });
+            }
+        });
+    }
+
+    // Parse [%csl ...] circles
+    const cslRegex = /\[%csl\s+([^\]]+)\]/g;
+    while ((match = cslRegex.exec(comment)) !== null) {
+        match[1].split(',').forEach(token => {
+            token = token.trim();
+            if (token.length >= 3) {
+                const brush = colorMap[token[0]] || 'green';
+                const orig = token[1] + token[2];
+                shapes.push({ orig, dest: orig, brush });
+            }
+        });
+    }
+
+    // Strip annotations from text
+    const text = comment.replace(/\[%cal\s+[^\]]+\]/g, '').replace(/\[%csl\s+[^\]]+\]/g, '').trim();
+
+    return { text, shapes };
+}
 
 function formatMoveText(usi, pos) {
     const parsed = Shogiops.parseUsi(usi);
@@ -41,9 +82,16 @@ async function loadRepertoire(lastMoveUsi) {
 function updateMenuState() {
     const revertBtn = document.querySelector('button[onclick="revertMove()"]');
     const toRootBtn = document.querySelector('button[onclick="toRoot()"]');
+    const advanceBtn = document.querySelector('button[onclick="advanceMove()"]');
 
     if (revertBtn) revertBtn.disabled = history.length === 0;
     if (toRootBtn) toRootBtn.disabled = currentSfen === repertoire.rootSfen;
+
+    if (advanceBtn) {
+        const nodeKey = sanitizeSfen(currentSfen);
+        const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+        advanceBtn.disabled = node.moves.length !== 1;
+    }
 }
 
 function renderBoard(lastMoveUsi) {
@@ -171,6 +219,7 @@ async function handleMove(moveData) {
 
         clearEngineAnalysis();
         editingCommentUsi = null;
+        lastMoveComment = null; // new move has no comment yet
         history.push(currentSfen);
         currentSfen = nextSfen;
         await loadRepertoire(usi);
@@ -207,7 +256,10 @@ function sanitizeSfen(sfen) {
 
 function formatComment(comment) {
     if (!comment) return "";
-    return comment.split('\n').map(line => {
+    const { text } = parseAnnotations(comment);
+    if (!text) return "";
+    return text.split('\n').map(line => {
+        if (!line.trim()) return "";
         let cls = "";
         let icon = "";
         if (line.startsWith("Blunder")) {
@@ -231,7 +283,27 @@ function formatComment(comment) {
     }).join("");
 }
 
+function updateCommentDisplay() {
+    const panel = document.getElementById('comment-display');
+    if (!panel) return;
+
+    // Show root comment when at root position, otherwise show last move comment
+    const comment = lastMoveComment || (currentSfen === repertoire?.rootSfen ? repertoire?.rootComment : null);
+
+    if (comment) {
+        const { text } = parseAnnotations(comment);
+        if (text) {
+            panel.innerHTML = formatComment(comment);
+            panel.style.display = 'block';
+            return;
+        }
+    }
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+}
+
 function displayMoveArrows() {
+    updateCommentDisplay();
     if (engineArrowsActive || !sg) return;
     if (!repertoire || !repertoire.nodes) {
         sg.setAutoShapes([]);
@@ -242,21 +314,25 @@ function displayMoveArrows() {
     const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
 
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
-    const brushes = ['green', 'blue', 'yellow', 'red'];
     const shapes = [];
 
     node.moves.forEach((move, index) => {
-        const brush = brushes[Math.min(index, brushes.length - 1)];
+        const brush = 'dark';
         const parsed = Shogiops.parseUsi(move.usi);
         if (parsed) {
             if (parsed.role) {
-                // Drop — piece descriptor as origin, like puzzle hints
                 shapes.push({ orig: { role: parsed.role, color: pos.turn }, dest: Shogiops.makeSquare(parsed.to), brush });
             } else {
                 shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
             }
         }
     });
+
+    // Add annotation shapes from the last played move's comment
+    if (lastMoveComment) {
+        const { shapes: annotationShapes } = parseAnnotations(lastMoveComment);
+        shapes.push(...annotationShapes);
+    }
 
     sg.setAutoShapes(shapes);
 }
@@ -288,6 +364,7 @@ function renderVariations() {
             moveElem.onclick = () => {
                 clearEngineAnalysis();
                 editingCommentUsi = null;
+                lastMoveComment = move.comment || null;
                 history.push(currentSfen);
                 currentSfen = move.nextSfen;
                 renderBoard(move.usi);
@@ -508,17 +585,32 @@ async function saveMoveComment(parentSfen, usi, isPuzzle) {
 // Engine analysis
 
 async function analyzePosition() {
+    const depth = parseInt(document.getElementById('analyzeDepth')?.value) || 15;
+    const timeSec = parseInt(document.getElementById('analyzeTime')?.value) || 0;
+    const multiPv = parseInt(document.getElementById('analyzeMultiPv')?.value) || 3;
+    const time = timeSec > 0 ? timeSec * 1000 : undefined;
+
+    // Close modal
+    const modalEl = document.getElementById('analyzeModal');
+    if (modalEl) {
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+    }
+
     const btn = document.getElementById('analyzeBtn');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i><span class="d-none d-lg-inline">Analyzing...</span>';
+        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Analyzing...';
     }
 
     try {
+        const body = { sfen: currentSfen, depth, multiPv };
+        if (time) body.time = time;
+
         const response = await fetch('/puzzle-creator/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ sfen: currentSfen, depth: 15, multiPv: 3 })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) throw new Error('Analysis failed');
@@ -535,7 +627,7 @@ async function analyzePosition() {
     } finally {
         if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '<i class="bi bi-cpu me-1"></i><span class="d-none d-lg-inline">Analyze</span>';
+            btn.innerHTML = 'Analyze';
         }
     }
 }
@@ -581,20 +673,35 @@ function displayEngineResults(moves) {
     moves.forEach((move, index) => {
         const score = move.score;
         let scoreText;
+        let scoreCls;
         if (score.kind === 'mate') {
             scoreText = score.value > 0 ? `#${score.value}` : `#${score.value}`;
+            scoreCls = score.value > 0 ? 'text-success' : 'text-danger';
         } else {
             scoreText = score.value >= 0 ? `+${score.value}` : `${score.value}`;
+            scoreCls = score.value >= 100 ? 'text-success' : score.value <= -100 ? 'text-danger' : 'text-warning';
         }
 
         const moveText = formatMoveText(move.usi, pos);
         const colorCls = colorIndicators[Math.min(index, colorIndicators.length - 1)];
+        const depthText = move.depth ? `d${move.depth}` : '';
 
         const row = document.createElement('div');
         row.className = 'analyse__engine-result d-flex align-items-center justify-content-between py-1';
 
         const moveInfo = document.createElement('span');
-        moveInfo.innerHTML = `<i class="bi bi-circle-fill ${colorCls} me-1" style="font-size:0.5em;vertical-align:middle"></i><span class="text-light">${moveText}</span> <span class="text-muted small ms-1">${scoreText}</span>`;
+        moveInfo.innerHTML = `<i class="bi bi-circle-fill ${colorCls} me-1" style="font-size:0.5em;vertical-align:middle"></i><span class="text-light">${moveText}</span> <span class="fw-bold ${scoreCls} ms-2">${scoreText}</span> <span class="text-muted small ms-1">${depthText}</span>`;
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'd-flex gap-1';
+
+        const addMoveBtn = document.createElement('button');
+        addMoveBtn.className = 'btn btn-sm btn-outline-success p-0 px-1';
+        addMoveBtn.style.lineHeight = '1';
+        addMoveBtn.innerHTML = '<i class="bi bi-plus-lg"></i>';
+        addMoveBtn.title = 'Add move to repertoire';
+        addMoveBtn.onclick = () => addEngineMove(move);
+        btnGroup.appendChild(addMoveBtn);
 
         const addBtn = document.createElement('button');
         addBtn.className = 'btn btn-sm btn-outline-info p-0 px-1';
@@ -602,9 +709,10 @@ function displayEngineResults(moves) {
         addBtn.innerHTML = '<i class="bi bi-chat-dots"></i>';
         addBtn.title = 'Add eval as comment';
         addBtn.onclick = () => addEngineEvalAsComment(move);
+        btnGroup.appendChild(addBtn);
 
         row.appendChild(moveInfo);
-        row.appendChild(addBtn);
+        row.appendChild(btnGroup);
         panel.appendChild(row);
     });
 }
@@ -662,10 +770,74 @@ async function addEngineEvalAsComment(engineMove) {
     }
 }
 
+async function addEngineMove(engineMove) {
+    const nextSfen = getNextSfen(engineMove.usi);
+    const score = engineMove.score;
+    let evalText;
+    if (score.kind === 'mate') {
+        evalText = `Mate in ${score.value}`;
+    } else {
+        evalText = score.value >= 0 ? `+${score.value}` : `${score.value}`;
+    }
+    const comment = `Engine: ${evalText} (d${engineMove.depth})`;
+
+    try {
+        const response = await fetch(`/repertoire/${repertoireId}/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parentSfen: currentSfen,
+                usi: engineMove.usi,
+                nextSfen: nextSfen,
+                comment: comment
+            })
+        });
+
+        if (!response.ok) throw new Error('Failed to add move');
+        await loadRepertoire();
+    } catch (e) {
+        console.error('Error adding engine move:', e);
+        alert('Error: ' + e.message);
+    }
+}
+
+async function reloadFromStudy() {
+    const btn = document.getElementById('reloadStudyBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i><span class="d-none d-lg-inline">Reloading...</span>';
+    }
+
+    try {
+        const response = await fetch(`/repertoire/${repertoireId}/reload-from-study`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: '{}'
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Failed to reload');
+
+        alert(`Reloaded ${data.moveCount} moves from study.`);
+        await loadRepertoire();
+    } catch (e) {
+        console.error('Error reloading from study:', e);
+        alert('Error: ' + e.message);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i><span class="d-none d-lg-inline">Reload Study</span>';
+        }
+    }
+}
+
+window.reloadFromStudy = reloadFromStudy;
+
 export function revertMove() {
     if (history.length > 0) {
         clearEngineAnalysis();
         editingCommentUsi = null;
+        lastMoveComment = null;
         currentSfen = history.pop();
         renderBoard();
         renderVariations();
@@ -678,6 +850,7 @@ export function toRoot() {
     if (currentSfen !== repertoire.rootSfen) {
         clearEngineAnalysis();
         editingCommentUsi = null;
+        lastMoveComment = null;
         history = [];
         currentSfen = repertoire.rootSfen;
         renderBoard();
@@ -687,8 +860,38 @@ export function toRoot() {
     }
 }
 
+export function advanceMove() {
+    if (!repertoire || !repertoire.nodes) return;
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes[nodeKey]) || { moves: [] };
+    if (node.moves.length === 1) {
+        const move = node.moves[0];
+        clearEngineAnalysis();
+        editingCommentUsi = null;
+        lastMoveComment = move.comment || null;
+        history.push(currentSfen);
+        currentSfen = move.nextSfen;
+        renderBoard(move.usi);
+        renderVariations();
+        updateMenuState();
+        displayMoveArrows();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        revertMove();
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        advanceMove();
+    }
+});
+
 window.revertMove = revertMove;
 window.toRoot = toRoot;
+window.advanceMove = advanceMove;
 window.saveMoveDetails = saveMoveDetails;
 window.analyzePosition = analyzePosition;
 window.clearEngineAnalysis = clearEngineAnalysis;

@@ -1574,6 +1574,14 @@ body.custom.grid-width-3.coords-edge .main-board .sg-wrap sg-board,body.custom.g
     fill: #003088
 }
 
+.sg-shapes g.dark ellipse,.sg-shapes g.dark line {
+    stroke: #1a1a1a
+}
+
+.sg-shapes g.dark g.description ellipse,.sg-shapes marker#arrowhead-dark path {
+    fill: #1a1a1a
+}
+
 .sg-shapes g.suggest ellipse,.sg-shapes g.suggest line {
     stroke: #14551e
 }

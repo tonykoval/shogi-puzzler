@@ -174,12 +174,179 @@ function readKifFile(file, callback) {
     reader.readAsArrayBuffer(file);
 }
 
+export async function importLishogiStudy() {
+    const url = document.getElementById('lishogiStudyUrl').value.trim();
+    if (!url) {
+        alert('Please enter a Lishogi study URL.');
+        return;
+    }
+
+    const btn = document.getElementById('importLishogiStudyBtn');
+    const originalText = btn.innerText;
+    const progressContainer = document.getElementById('importStudyProgress');
+    const progressStatus = document.getElementById('importStudyStatus');
+    const progressBar = document.getElementById('importStudyBar');
+
+    btn.disabled = true;
+    btn.innerText = 'Preparing...';
+
+    try {
+        // Phase 1: Prepare - fetch and split chapters server-side
+        const prepResponse = await fetch('/repertoire/prepare-lishogi-study', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url })
+        });
+        const prepData = await prepResponse.json();
+        if (!prepResponse.ok) throw new Error(prepData.error || prepResponse.statusText);
+
+        const { key, chapters } = prepData;
+
+        // For single-chapter studies, use the original single-request endpoint
+        if (chapters.length <= 1) {
+            btn.innerText = 'Importing...';
+            const response = await fetch('/repertoire/create-from-lishogi-study', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || response.statusText);
+
+            const count = data.chapters.length;
+            const summary = data.chapters.map(c => `${c.name} (${c.moveCount} moves)`).join(', ');
+            alert(`Imported ${count} repertoire(s): ${summary}`);
+            window.location.reload();
+            return;
+        }
+
+        // Phase 2: Multi-chapter - import one by one with progress
+        progressContainer.style.display = 'block';
+        btn.innerText = 'Importing...';
+
+        const total = chapters.length;
+        const results = [];
+        let failed = null;
+
+        for (let i = 0; i < total; i++) {
+            const chapter = chapters[i];
+            progressStatus.textContent = `Importing chapter ${i + 1} / ${total}: ${chapter.name}`;
+            progressBar.style.width = `${((i) / total) * 100}%`;
+
+            try {
+                const chResponse = await fetch('/repertoire/import-lishogi-chapter', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ key, index: chapter.index })
+                });
+                const chData = await chResponse.json();
+                if (!chResponse.ok) throw new Error(chData.error || chResponse.statusText);
+
+                results.push(chData);
+            } catch (chError) {
+                failed = { chapter: chapter.name, index: i + 1, error: chError.message };
+                break;
+            }
+
+            progressBar.style.width = `${((i + 1) / total) * 100}%`;
+        }
+
+        if (failed) {
+            progressStatus.textContent = `Failed at chapter ${failed.index} / ${total}: ${failed.chapter}`;
+            progressBar.classList.add('bg-danger');
+            const imported = results.length;
+            alert(`Error importing chapter "${failed.chapter}": ${failed.error}\n\n${imported} chapter(s) were imported successfully before the error.`);
+            if (imported > 0) {
+                window.location.reload();
+            } else {
+                btn.disabled = false;
+                btn.innerText = originalText;
+            }
+        } else {
+            progressStatus.textContent = `Done! Imported ${results.length} chapters.`;
+            progressBar.style.width = '100%';
+            const summary = results.map(c => `${c.name} (${c.moveCount} moves)`).join(', ');
+            alert(`Imported ${results.length} repertoire(s): ${summary}`);
+            window.location.reload();
+        }
+    } catch (error) {
+        console.error('Error:', error);
+        alert('Failed to import Lishogi study: ' + error.message);
+        btn.disabled = false;
+        btn.innerText = originalText;
+        if (progressContainer) progressContainer.style.display = 'none';
+    }
+}
+
+let activeSourceFilter = 'all';
+
+export function filterRepertoires() {
+    const searchText = (document.getElementById('repertoireSearch')?.value || '').toLowerCase();
+    const filter = activeSourceFilter;
+
+    // Filter study groups
+    document.querySelectorAll('.repertoire-group').forEach(group => {
+        const source = group.dataset.source || '';
+        const sourceMatch = filter === 'all' || source === filter;
+        const items = group.querySelectorAll('.repertoire-item');
+        let anyVisible = false;
+
+        items.forEach(item => {
+            const name = item.dataset.name || '';
+            const nameMatch = !searchText || name.includes(searchText);
+            const visible = sourceMatch && nameMatch;
+            item.style.display = visible ? '' : 'none';
+            if (visible) anyVisible = true;
+        });
+
+        group.style.display = (sourceMatch && anyVisible) ? '' : 'none';
+    });
+
+    // Filter standalone items
+    document.querySelectorAll('#repertoire-list > .row .repertoire-item').forEach(item => {
+        const source = item.dataset.source || 'manual';
+        const name = item.dataset.name || '';
+        const sourceMatch = filter === 'all' || source === filter;
+        const nameMatch = !searchText || name.includes(searchText);
+        item.style.display = (sourceMatch && nameMatch) ? '' : 'none';
+    });
+}
+
+export function setSourceFilter(btn) {
+    document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeSourceFilter = btn.dataset.filter;
+    filterRepertoires();
+}
+
+export function deleteStudyGroup(ids) {
+    const idList = ids.split(',').filter(id => id);
+    if (!confirm(`Delete all ${idList.length} chapters in this study?`)) return;
+
+    Promise.all(idList.map(id =>
+        fetch('/repertoire/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+        })
+    )).then(() => {
+        window.location.reload();
+    }).catch(error => {
+        console.error('Error:', error);
+        alert('Failed to delete some chapters: ' + error.message);
+    });
+}
+
 // Expose to global scope for onclick handlers
 window.createRepertoire = createRepertoire;
 window.deleteRepertoire = deleteRepertoire;
 window.reloadRepertoire = reloadRepertoire;
 window.toggleRepertoirePublic = toggleRepertoirePublic;
 window.importKifRepertoire = importKifRepertoire;
+window.importLishogiStudy = importLishogiStudy;
+window.filterRepertoires = filterRepertoires;
+window.setSourceFilter = setSourceFilter;
+window.deleteStudyGroup = deleteStudyGroup;
 
 document.addEventListener('DOMContentLoaded', () => {
     const isAutoReloadCheckbox = document.getElementById('isAutoReload');

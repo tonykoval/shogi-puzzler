@@ -11,6 +11,9 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 object RepertoireRoutes extends BaseRoutes {
 
+  // Cache for two-phase Lishogi study import: key -> (chapters, sourceAuthor, studyUrl)
+  private val studyCache = new java.util.concurrent.ConcurrentHashMap[String, (Seq[(String, String, Option[String], Option[String])], Option[String], String)]()
+
   private def withOwnership(id: String, email: String)(f: org.mongodb.scala.Document => cask.Response[ujson.Value]): cask.Response[ujson.Value] = {
     val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
     repertoire match {
@@ -41,6 +44,10 @@ object RepertoireRoutes extends BaseRoutes {
   }
 
   def renderRepertoirePage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document]) = {
+    // Group repertoires: those with studyUrl grouped together, standalone ones separate
+    val (studyReps, standaloneReps) = repertoires.partition(_.get("studyUrl").exists(v => v.isString && v.asString().getValue.nonEmpty))
+    val studyGroups = studyReps.groupBy(_.get("studyUrl").map(_.asString().getValue).getOrElse("")).toSeq.sortBy(_._1)
+
     Components.layout(
       "Shogi Repertoire",
       userEmail,
@@ -56,42 +63,125 @@ object RepertoireRoutes extends BaseRoutes {
         h1("My Repertoires"),
         div(
           button(cls := "btn btn-primary", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#createRepertoireModal")("Create New"),
-          button(cls := "btn btn-success ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal")("Import KIF")
+          button(cls := "btn btn-success ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal")("Import KIF"),
+          button(cls := "btn btn-info ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importLishogiStudyModal")("Import Lishogi Study")
         )
       ),
-      
-      div(cls := "row")(
-        repertoires.map { rep =>
-          val id = rep.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
-          val name = rep.getString("name")
-          val isAutoReload = rep.get("isAutoReload").exists(_.asBoolean().getValue)
-          val isPublic = rep.get("is_public").exists(_.asBoolean().getValue)
-          val reloadColor = rep.get("reloadColor").map(_.asString().getValue).getOrElse("")
-          val colorBadge: Modifier = if (isAutoReload && reloadColor.nonEmpty) {
-            tag("span")(cls := "badge bg-secondary ms-2")(reloadColor.capitalize)
-          } else frag()
 
-          div(cls := "col-md-4 mb-3")(
-            div(cls := "card bg-dark text-light border-secondary")(
-              div(cls := "card-body")(
-                h5(cls := "card-title")(name, colorBadge),
-                a(href := s"/repertoire/$id", cls := "btn btn-sm btn-outline-info")("Open"),
-                if (isAutoReload) {
-                  button(cls := "btn btn-sm btn-outline-warning ms-2", onclick := s"reloadRepertoire('$id')")("Reload")
-                } else frag(),
-                if (isPublic) {
-                  frag(
-                    button(cls := "btn btn-sm btn-outline-success ms-2", onclick := s"toggleRepertoirePublic('$id', false)")(i(cls := "bi bi-globe me-1"), "Public"),
-                    a(href := s"/repertoire-viewer/$id", cls := "btn btn-sm btn-outline-light ms-2", target := "_blank")(i(cls := "bi bi-eye me-1"), "View")
+      // Filter bar
+      div(cls := "card bg-dark border-secondary mb-4")(
+        div(cls := "card-body py-2")(
+          div(cls := "d-flex align-items-center gap-3 flex-wrap")(
+            div(cls := "flex-grow-1", style := "max-width: 300px;")(
+              input(`type` := "text", id := "repertoireSearch", cls := "form-control form-control-sm bg-dark text-light border-secondary", placeholder := "Search repertoires...", attr("oninput") := "filterRepertoires()")
+            ),
+            div(cls := "btn-group btn-group-sm")(
+              button(cls := "btn btn-outline-light active", attr("data-filter") := "all", onclick := "setSourceFilter(this)")("All"),
+              button(cls := "btn btn-outline-light", attr("data-filter") := "lishogi", onclick := "setSourceFilter(this)")("Lishogi Study"),
+              button(cls := "btn btn-outline-light", attr("data-filter") := "manual", onclick := "setSourceFilter(this)")("Manual / KIF")
+            )
+          )
+        )
+      ),
+
+      div(id := "repertoire-list")(
+        // Study groups
+        studyGroups.map { case (studyUrl, reps) =>
+          val firstRep = reps.head
+          val studyName = firstRep.get("studyName").map(_.asString().getValue).getOrElse {
+            // Fallback: use first rep's name
+            firstRep.getString("name")
+          }
+          val author = firstRep.get("sourceAuthor").map(_.asString().getValue).getOrElse("")
+          val groupId = studyUrl.hashCode.toHexString
+
+          div(cls := "card bg-dark text-light border-secondary mb-3 repertoire-group", attr("data-source") := "lishogi")(
+            div(cls := "card-header d-flex align-items-center py-2", attr("data-bs-toggle") := "collapse", attr("data-bs-target") := s"#study-$groupId", role := "button", style := "cursor: pointer;")(
+              i(cls := "bi bi-book me-2 text-info"),
+              tag("span")(cls := "fw-semibold me-2")(studyName),
+              tag("span")(cls := "badge bg-secondary me-2")(s"${reps.size} chapters"),
+              if (author.nonEmpty) frag(
+                tag("span")(cls := "text-muted small me-2")(
+                  "by ",
+                  a(href := s"https://lishogi.org/@/$author", target := "_blank", cls := "text-muted text-decoration-none")(author)
+                )
+              ) else frag(),
+              a(href := studyUrl, target := "_blank", cls := "text-muted small ms-auto me-3", onclick := "event.stopPropagation();")(
+                i(cls := "bi bi-box-arrow-up-right me-1"), "Lishogi"
+              ),
+              button(cls := "btn btn-sm btn-outline-danger", onclick := s"deleteStudyGroup('${reps.map(r => r.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")).mkString(",")}'); event.stopPropagation();", title := "Delete all chapters")(
+                i(cls := "bi bi-trash")
+              )
+            ),
+            div(cls := "collapse show", id := s"study-$groupId")(
+              div(cls := "list-group list-group-flush")(
+                reps.map { rep =>
+                  val id = rep.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
+                  val repName = rep.getString("name")
+                  val isPublic = rep.get("is_public").exists(_.asBoolean().getValue)
+
+                  div(cls := "list-group-item bg-dark text-light border-secondary d-flex align-items-center py-2 repertoire-item", attr("data-name") := repName.toLowerCase)(
+                    a(href := s"/repertoire/$id", cls := "text-light text-decoration-none flex-grow-1")(
+                      repName
+                    ),
+                    if (isPublic) tag("span")(cls := "badge bg-success me-2")("Public") else frag(),
+                    div(cls := "btn-group btn-group-sm")(
+                      a(href := s"/repertoire/$id", cls := "btn btn-outline-info btn-sm", title := "Open")(i(cls := "bi bi-pencil")),
+                      if (isPublic) frag(
+                        button(cls := "btn btn-outline-success btn-sm", onclick := s"toggleRepertoirePublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
+                        a(href := s"/repertoire-viewer/$id", cls := "btn btn-outline-light btn-sm", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
+                      ) else {
+                        button(cls := "btn btn-outline-secondary btn-sm", onclick := s"toggleRepertoirePublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
+                      },
+                      button(cls := "btn btn-outline-danger btn-sm", onclick := s"deleteRepertoire('$id')", title := "Delete")(i(cls := "bi bi-trash"))
+                    )
                   )
-                } else {
-                  button(cls := "btn btn-sm btn-outline-secondary ms-2", onclick := s"toggleRepertoirePublic('$id', true)")(i(cls := "bi bi-lock me-1"), "Private")
-                },
-                button(cls := "btn btn-sm btn-outline-danger ms-2", onclick := s"deleteRepertoire('$id')")("Delete")
+                }
               )
             )
           )
-        }
+        },
+
+        // Standalone repertoires
+        div(cls := "row")(
+          standaloneReps.map { rep =>
+            val id = rep.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
+            val name = rep.getString("name")
+            val isAutoReload = rep.get("isAutoReload").exists(_.asBoolean().getValue)
+            val isPublic = rep.get("is_public").exists(_.asBoolean().getValue)
+            val reloadColor = rep.get("reloadColor").map(_.asString().getValue).getOrElse("")
+            val hasSourceUrl = rep.get("sourceUrl").exists(v => v.isString && v.asString().getValue.nonEmpty)
+            val sourceType = if (hasSourceUrl) "lishogi" else "manual"
+
+            div(cls := "col-md-4 mb-3 repertoire-item", attr("data-source") := sourceType, attr("data-name") := name.toLowerCase)(
+              div(cls := "card bg-dark text-light border-secondary")(
+                div(cls := "card-body py-2")(
+                  div(cls := "d-flex align-items-center mb-2")(
+                    h6(cls := "card-title mb-0 flex-grow-1")(
+                      name,
+                      if (isAutoReload && reloadColor.nonEmpty) tag("span")(cls := "badge bg-secondary ms-2")(reloadColor.capitalize) else frag(),
+                      if (isAutoReload) tag("span")(cls := "badge bg-warning text-dark ms-2")("Auto") else frag(),
+                      if (isPublic) tag("span")(cls := "badge bg-success ms-2")("Public") else frag()
+                    )
+                  ),
+                  div(cls := "btn-group btn-group-sm")(
+                    a(href := s"/repertoire/$id", cls := "btn btn-outline-info", title := "Open")(i(cls := "bi bi-pencil me-1"), "Open"),
+                    if (isAutoReload) {
+                      button(cls := "btn btn-outline-warning", onclick := s"reloadRepertoire('$id')", title := "Reload from games")(i(cls := "bi bi-arrow-repeat"))
+                    } else frag(),
+                    if (isPublic) frag(
+                      button(cls := "btn btn-outline-success", onclick := s"toggleRepertoirePublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
+                      a(href := s"/repertoire-viewer/$id", cls := "btn btn-outline-light", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
+                    ) else {
+                      button(cls := "btn btn-outline-secondary", onclick := s"toggleRepertoirePublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
+                    },
+                    button(cls := "btn btn-outline-danger", onclick := s"deleteRepertoire('$id')", title := "Delete")(i(cls := "bi bi-trash"))
+                  )
+                )
+              )
+            )
+          }
+        )
       ),
 
       // Create Modal
@@ -157,6 +247,35 @@ object RepertoireRoutes extends BaseRoutes {
             )
           )
         )
+      ),
+
+      // Import Lishogi Study Modal
+      div(cls := "modal fade", id := "importLishogiStudyModal", tabindex := "-1")(
+        div(cls := "modal-dialog")(
+          div(cls := "modal-content bg-dark text-light border-secondary")(
+            div(cls := "modal-header")(
+              h5(cls := "modal-title")("Import Lishogi Study"),
+              button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
+            ),
+            div(cls := "modal-body")(
+              div(cls := "mb-3")(
+                label(cls := "form-label")("Lishogi Study URL"),
+                input(`type` := "text", id := "lishogiStudyUrl", cls := "form-control bg-dark text-light border-secondary", placeholder := "https://lishogi.org/study/...")
+              ),
+              p(cls := "text-muted small")("Enter a Lishogi study URL. If the URL includes a chapter ID, only that chapter will be imported. Otherwise, all chapters will be imported as separate repertoires."),
+              div(id := "importStudyProgress", style := "display:none")(
+                div(cls := "mb-2")(tag("small")(id := "importStudyStatus")("Preparing...")),
+                div(cls := "progress")(
+                  div(cls := "progress-bar", id := "importStudyBar", role := "progressbar", style := "width:0%")
+                )
+              )
+            ),
+            div(cls := "modal-footer")(
+              button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
+              button(`type` := "button", cls := "btn btn-info", id := "importLishogiStudyBtn", onclick := "importLishogiStudy()")("Import")
+            )
+          )
+        )
       )
     )
   }
@@ -182,6 +301,225 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
+  @cask.post("/repertoire/create-from-lishogi-study")
+  def createFromLishogiStudy(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      try {
+        val json = ujson.read(request.text())
+        val url = json("url").str
+
+        // Parse study ID and optional chapter ID from URL
+        val urlPattern = """https?://lishogi\.org/study/([a-zA-Z0-9]+)(?:/([a-zA-Z0-9]+))?""".r
+        val (studyId, chapterIdOpt) = url match {
+          case urlPattern(sid, cid) => (sid, Option(cid))
+          case _ => throw new Exception("Invalid Lishogi study URL. Expected: https://lishogi.org/study/{studyId} or https://lishogi.org/study/{studyId}/{chapterId}")
+        }
+
+        // Fetch KIF from Lishogi
+        val kifUrl = chapterIdOpt match {
+          case Some(cid) => s"https://lishogi.org/study/$studyId/$cid.kif"
+          case None => s"https://lishogi.org/study/$studyId.kif"
+        }
+        logger.info(s"Fetching Lishogi study KIF from: $kifUrl")
+        val kifResponse = requests.get(kifUrl)
+        if (kifResponse.statusCode != 200) {
+          throw new Exception(s"Failed to fetch study from Lishogi (HTTP ${kifResponse.statusCode})")
+        }
+        val fullKif = kifResponse.text()
+
+        // Extract author (ownerId) from Lishogi study page
+        val studyUrl = s"https://lishogi.org/study/$studyId"
+        val sourceAuthor: Option[String] = try {
+          val pageResponse = requests.get(studyUrl)
+          val ownerPattern = """"ownerId"\s*:\s*"([^"]+)"""".r
+          ownerPattern.findFirstMatchIn(pageResponse.text()).map(_.group(1))
+        } catch {
+          case _: Exception =>
+            logger.warn(s"Could not fetch author from Lishogi study page: $studyUrl")
+            None
+        }
+        logger.info(s"Study author: ${sourceAuthor.getOrElse("unknown")}")
+
+        // Split multi-chapter KIF by 棋戦： header lines
+        val chapters = splitMultiChapterKif(fullKif)
+        logger.info(s"Found ${chapters.size} chapter(s) in study")
+
+        val results = chapters.zipWithIndex.map { case ((chapterName, kifContent, chapterSourceUrl, chapterStudyName), idx) =>
+          val name = if (chapterName.nonEmpty) chapterName else s"Chapter ${idx + 1}"
+          val sName = chapterStudyName.filter(_.nonEmpty)
+          val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kifContent)
+          val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
+
+          val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
+            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+          }
+          Await.result(addFuture, 120.seconds)
+
+          logger.info(s"Chapter '$name' created: id=$id, moves=${moves.size}")
+          (id, name, moves.size)
+        }
+
+        cask.Response(
+          ujson.Obj(
+            "ids" -> ujson.Arr(results.map(r => ujson.Str(r._1)): _*),
+            "chapters" -> ujson.Arr(results.map(r => ujson.Obj("name" -> r._2, "moveCount" -> r._3)): _*)
+          ),
+          headers = Seq("Content-Type" -> "application/json")
+        )
+      } catch {
+        case e: Exception =>
+          logger.error("Error creating repertoire from Lishogi study", e)
+          cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
+    }
+  }
+
+  @cask.post("/repertoire/prepare-lishogi-study")
+  def prepareLishogiStudy(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { _ =>
+      try {
+        val json = ujson.read(request.text())
+        val url = json("url").str
+
+        val urlPattern = """https?://lishogi\.org/study/([a-zA-Z0-9]+)(?:/([a-zA-Z0-9]+))?""".r
+        val (studyId, chapterIdOpt) = url match {
+          case urlPattern(sid, cid) => (sid, Option(cid))
+          case _ => throw new Exception("Invalid Lishogi study URL. Expected: https://lishogi.org/study/{studyId} or https://lishogi.org/study/{studyId}/{chapterId}")
+        }
+
+        val kifUrl = chapterIdOpt match {
+          case Some(cid) => s"https://lishogi.org/study/$studyId/$cid.kif"
+          case None => s"https://lishogi.org/study/$studyId.kif"
+        }
+        logger.info(s"Preparing Lishogi study KIF from: $kifUrl")
+        val kifResponse = requests.get(kifUrl)
+        if (kifResponse.statusCode != 200) {
+          throw new Exception(s"Failed to fetch study from Lishogi (HTTP ${kifResponse.statusCode})")
+        }
+        val fullKif = kifResponse.text()
+
+        val studyUrl = s"https://lishogi.org/study/$studyId"
+        val sourceAuthor: Option[String] = try {
+          val pageResponse = requests.get(studyUrl)
+          val ownerPattern = """"ownerId"\s*:\s*"([^"]+)"""".r
+          ownerPattern.findFirstMatchIn(pageResponse.text()).map(_.group(1))
+        } catch {
+          case _: Exception =>
+            logger.warn(s"Could not fetch author from Lishogi study page: $studyUrl")
+            None
+        }
+
+        val chapters = splitMultiChapterKif(fullKif)
+        logger.info(s"Prepared ${chapters.size} chapter(s) for study $studyId")
+
+        val key = java.util.UUID.randomUUID().toString
+        studyCache.put(key, (chapters, sourceAuthor, studyUrl))
+
+        // Schedule cache cleanup after 10 minutes
+        val cleanupThread = new Thread(() => {
+          Thread.sleep(10 * 60 * 1000)
+          studyCache.remove(key)
+        })
+        cleanupThread.setDaemon(true)
+        cleanupThread.start()
+
+        val chaptersJson = ujson.Arr(chapters.zipWithIndex.map { case ((name, _, _, _), idx) =>
+          ujson.Obj("name" -> (if (name.nonEmpty) name else s"Chapter ${idx + 1}"), "index" -> idx)
+        }: _*)
+
+        cask.Response(
+          ujson.Obj("key" -> key, "chapters" -> chaptersJson),
+          headers = Seq("Content-Type" -> "application/json")
+        )
+      } catch {
+        case e: Exception =>
+          logger.error("Error preparing Lishogi study", e)
+          cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
+    }
+  }
+
+  @cask.post("/repertoire/import-lishogi-chapter")
+  def importLishogiChapter(request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      try {
+        val json = ujson.read(request.text())
+        val key = json("key").str
+        val index = json("index").num.toInt
+
+        val cached = studyCache.get(key)
+        if (cached == null) {
+          throw new Exception("Study data expired or not found. Please try again.")
+        }
+
+        val (chapters, sourceAuthor, studyUrl) = cached
+        if (index < 0 || index >= chapters.size) {
+          throw new Exception(s"Invalid chapter index: $index")
+        }
+
+        val (chapterName, kifContent, chapterSourceUrl, chapterStudyName) = chapters(index)
+        val name = if (chapterName.nonEmpty) chapterName else s"Chapter ${index + 1}"
+        val sName = chapterStudyName.filter(_.nonEmpty)
+
+        val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kifContent)
+        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
+
+        val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
+          prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+        }
+        Await.result(addFuture, 120.seconds)
+
+        logger.info(s"Chapter '$name' imported: id=$id, moves=${moves.size}")
+        cask.Response(
+          ujson.Obj("id" -> id, "name" -> name, "moveCount" -> moves.size),
+          headers = Seq("Content-Type" -> "application/json")
+        )
+      } catch {
+        case e: Exception =>
+          logger.error("Error importing Lishogi chapter", e)
+          cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+      }
+    }
+  }
+
+  private def extractChapterMeta(chapterLines: Seq[String]): (String, Option[String], Option[String]) = {
+    val fullTitle = chapterLines.find(_.startsWith("棋戦：")).map(_.stripPrefix("棋戦：").trim).getOrElse("")
+    val dashIdx = fullTitle.lastIndexOf(" - ")
+    val (studyName, chapterName) = if (dashIdx >= 0) {
+      (Some(fullTitle.substring(0, dashIdx).trim), fullTitle.substring(dashIdx + 3).trim)
+    } else {
+      (None, fullTitle)
+    }
+    val sourceUrl = chapterLines.find(_.startsWith("場所：")).map(_.stripPrefix("場所：").trim).filter(_.startsWith("http"))
+    (chapterName, sourceUrl, studyName)
+  }
+
+  private def splitMultiChapterKif(fullKif: String): Seq[(String, String, Option[String], Option[String])] = {
+    val lines = fullKif.split("\n").toSeq
+    val chapterBreaks = lines.zipWithIndex.filter { case (line, _) =>
+      line.startsWith("棋戦：")
+    }.map(_._2)
+
+    if (chapterBreaks.size <= 1) {
+      val (name, sourceUrl, studyName) = extractChapterMeta(lines)
+      Seq((name, fullKif, sourceUrl, studyName))
+    } else {
+      val chapterStarts = chapterBreaks.map { idx =>
+        var start = idx
+        while (start > 0 && lines(start - 1).trim.nonEmpty) start -= 1
+        start
+      }
+
+      chapterStarts.zipWithIndex.map { case (startIdx, i) =>
+        val endIdx = if (i + 1 < chapterStarts.size) chapterStarts(i + 1) else lines.size
+        val chapterLines = lines.slice(startIdx, endIdx)
+        val kifContent = chapterLines.mkString("\n")
+        val (name, sourceUrl, studyName) = extractChapterMeta(chapterLines)
+        (name, kifContent, sourceUrl, studyName)
+      }
+    }
+  }
+
   @cask.post("/repertoire/create-from-kif")
   def createFromKif(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
@@ -190,8 +528,8 @@ object RepertoireRoutes extends BaseRoutes {
         val name = json("name").str
         val kif = json("kif").str
 
-        val (rootSfen, moves) = GameLoader.parseKifTree(kif)
-        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen)), 10.seconds)
+        val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kif)
+        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment), 10.seconds)
 
         val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
           prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
@@ -234,6 +572,50 @@ object RepertoireRoutes extends BaseRoutes {
         } catch {
           case e: Exception =>
             logger.error(s"Error importing KIF into repertoire $id", e)
+            cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
+        }
+      }
+    }
+  }
+
+  @cask.post("/repertoire/:id/reload-from-study")
+  def reloadFromStudy(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { rep =>
+        try {
+          val sourceUrl = rep.get("sourceUrl").map(_.asString().getValue).getOrElse("")
+          if (sourceUrl.isEmpty) {
+            return cask.Response(ujson.Obj("error" -> "This repertoire has no Lishogi study source URL."), statusCode = 400)
+          }
+
+          val kifUrl = if (sourceUrl.endsWith(".kif")) sourceUrl else sourceUrl + ".kif"
+          logger.info(s"Reloading repertoire $id from study: $kifUrl")
+          val kifResponse = requests.get(kifUrl)
+          if (kifResponse.statusCode != 200) {
+            throw new Exception(s"Failed to fetch study from Lishogi (HTTP ${kifResponse.statusCode})")
+          }
+          val kifContent = kifResponse.text()
+          val (_, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kifContent)
+
+          // Update rootComment if present
+          initialComment.foreach { comment =>
+            Await.result(RepertoireRepository.updateRootComment(id, comment), 10.seconds)
+          }
+
+          // Merge moves (addMove skips duplicates)
+          val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
+            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+          }
+          Await.result(addFuture, 120.seconds)
+
+          logger.info(s"Reloaded ${moves.size} moves from study into repertoire $id")
+          cask.Response(
+            ujson.Obj("success" -> true, "moveCount" -> moves.size),
+            headers = Seq("Content-Type" -> "application/json")
+          )
+        } catch {
+          case e: Exception =>
+            logger.error(s"Error reloading repertoire $id from study", e)
             cask.Response(ujson.Obj("error" -> e.getMessage), statusCode = 500)
         }
       }
@@ -419,7 +801,10 @@ object RepertoireRoutes extends BaseRoutes {
   def renderRepertoireEditor(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document) = {
     val id = repertoire.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
     val name = repertoire.getString("name")
-    
+    val sourceUrl = repertoire.get("sourceUrl").map(_.asString().getValue).getOrElse("")
+    val sourceAuthor = repertoire.get("sourceAuthor").map(_.asString().getValue).getOrElse("")
+    val studyUrl = repertoire.get("studyUrl").map(_.asString().getValue).getOrElse("")
+
     html(lang := "en", cls := "dark", style := "--zoom:90;")(
       head(
         meta(charset := "utf-8"),
@@ -446,15 +831,33 @@ object RepertoireRoutes extends BaseRoutes {
                 tag("sg-hand-wrap")(attr("id") := "hand-bottom")
               )
             ),
+            div(cls := "puzzle__comment", attr("id") := "comment-card")(
+              h2(cls := "puzzle__comment__title")(name),
+              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
+                div(cls := "puzzle__comment__source small text-muted mb-2")(
+                  if (sourceAuthor.nonEmpty) frag(
+                    i(cls := "bi bi-person me-1"),
+                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank", cls := "text-muted")(sourceAuthor)
+                  ) else frag(),
+                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
+                  if (studyUrl.nonEmpty) frag(
+                    i(cls := "bi bi-book me-1"),
+                    a(href := studyUrl, attr("target") := "_blank", cls := "text-muted")("Lishogi Study")
+                  ) else frag()
+                )
+              } else frag(),
+              div(attr("id") := "comment-display", style := "display:none;")
+            ),
             div(cls := "puzzle__side")(
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
                     div(cls := "analyse__tools__menu")(
+                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
                       button(cls := "btn btn-sm btn-outline-light me-1", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
-                      button(cls := "btn btn-sm btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
+                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right")),
                       div(cls := "ms-auto")(
-                        button(cls := "btn btn-sm btn-outline-info", attr("id") := "analyzeBtn", onclick := "analyzePosition()", title := "Analyze position with engine")(i(cls := "bi bi-cpu me-1"), tag("span")(cls := "d-none d-lg-inline")("Analyze"))
+                        button(cls := "btn btn-sm btn-outline-info", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#analyzeModal", title := "Analyze position with engine")(i(cls := "bi bi-cpu me-1"), tag("span")(cls := "d-none d-lg-inline")("Analyze"))
                       )
                     ),
                     div(cls := "analyse__engine-results", attr("id") := "engine-results", style := "display:none;"),
@@ -473,14 +876,13 @@ object RepertoireRoutes extends BaseRoutes {
                       ),
                       div(cls := "btn-group btn-group-sm w-100 mt-1")(
                         button(cls := "btn btn-outline-success", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal", title := "Import moves from KIF file")(i(cls := "bi bi-file-earmark-arrow-up me-1"), tag("span")(cls := "d-none d-lg-inline")("Import KIF")),
-                        button(cls := "btn btn-outline-light", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import USI move sequence")(i(cls := "bi bi-list-ol me-1"), tag("span")(cls := "d-none d-lg-inline")("Import USI"))
+                        button(cls := "btn btn-outline-light", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import USI move sequence")(i(cls := "bi bi-list-ol me-1"), tag("span")(cls := "d-none d-lg-inline")("Import USI")),
+                        if (sourceUrl.nonEmpty) button(cls := "btn btn-outline-info", attr("id") := "reloadStudyBtn", onclick := "reloadFromStudy()", title := "Reload moves from Lishogi study")(i(cls := "bi bi-arrow-repeat me-1"), tag("span")(cls := "d-none d-lg-inline")("Reload Study")) else frag()
                       )
                     )
                   )
                 ),
-                div(cls := "puzzle__feedback")(
-                  h2(name)
-                )
+                div(cls := "puzzle__feedback")()
               )
             )
           )
@@ -488,6 +890,7 @@ object RepertoireRoutes extends BaseRoutes {
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
         input(`type` := "hidden", attr("id") := "repertoireId", attr("value") := id),
+        input(`type` := "hidden", attr("id") := "sourceUrl", attr("value") := sourceUrl),
         
         // Move Edit Modal
         div(cls := "modal fade", attr("id") := "moveEditModal", attr("tabindex") := "-1")(
@@ -564,7 +967,37 @@ object RepertoireRoutes extends BaseRoutes {
             )
           )
         ),
-        
+
+        // Analyze Modal
+        div(cls := "modal fade", attr("id") := "analyzeModal", attr("tabindex") := "-1")(
+          div(cls := "modal-dialog modal-sm")(
+            div(cls := "modal-content bg-dark text-light border-secondary")(
+              div(cls := "modal-header")(
+                h5(cls := "modal-title")("Engine Analysis"),
+                button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
+              ),
+              div(cls := "modal-body")(
+                div(cls := "mb-3")(
+                  label(cls := "form-label")("Depth"),
+                  input(`type` := "number", attr("id") := "analyzeDepth", cls := "form-control bg-dark text-light border-secondary", attr("value") := "15", attr("min") := "1", attr("max") := "30")
+                ),
+                div(cls := "mb-3")(
+                  label(cls := "form-label")("Time (seconds, 0 = no limit)"),
+                  input(`type` := "number", attr("id") := "analyzeTime", cls := "form-control bg-dark text-light border-secondary", attr("value") := "0", attr("min") := "0", attr("max") := "120", attr("step") := "1")
+                ),
+                div(cls := "mb-3")(
+                  label(cls := "form-label")("MultiPV (candidate moves)"),
+                  input(`type` := "number", attr("id") := "analyzeMultiPv", cls := "form-control bg-dark text-light border-secondary", attr("value") := "3", attr("min") := "1", attr("max") := "10")
+                )
+              ),
+              div(cls := "modal-footer")(
+                button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
+                button(`type` := "button", cls := "btn btn-info", attr("id") := "analyzeBtn", onclick := "analyzePosition()")("Analyze")
+              )
+            )
+          )
+        ),
+
         script(src := "/js/repertoire-editor.js", `type` := "module")
       )
     )

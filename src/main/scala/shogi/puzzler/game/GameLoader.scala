@@ -171,7 +171,12 @@ object GameLoader {
    *
    * @return (rootSfen, moves) where moves includes all mainline and variation moves
    */
-  def parseKifTree(kifContent: String): (String, Seq[(String, String, String, Option[String])]) = {
+  def parseKifTree(kifContent: String): (String, Seq[(String, String, String, Option[String])]) =
+    parseKifTreeWithInitialComment(kifContent) match {
+      case (rootSfen, moves, _) => (rootSfen, moves)
+    }
+
+  def parseKifTreeWithInitialComment(kifContent: String): (String, Seq[(String, String, String, Option[String])], Option[String]) = {
     logger.info(s"[LOADER] Parsing KIF tree. Content length: ${kifContent.length}")
 
     KifParser.full(kifContent) match {
@@ -184,11 +189,15 @@ object GameLoader {
         val initialGame = Game(parsed.initialSfen, parsed.variant)
         val rootSfen = initialGame.toSfen.value
 
+        val initialComment = if (parsed.initialPosition.comments.nonEmpty)
+          Some(parsed.initialPosition.comments.mkString("\n"))
+        else None
+
         val moves = scala.collection.mutable.Buffer[(String, String, String, Option[String])]()
         walkMoves(initialGame, parsed.parsedSteps.value, moves)
 
-        logger.info(s"[LOADER] Parsed KIF tree: rootSfen=$rootSfen, ${moves.size} total moves")
-        (rootSfen, moves.toSeq)
+        logger.info(s"[LOADER] Parsed KIF tree: rootSfen=$rootSfen, ${moves.size} total moves, initialComment=${initialComment.isDefined}")
+        (rootSfen, moves.toSeq, initialComment)
     }
   }
 

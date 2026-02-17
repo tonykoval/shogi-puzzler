@@ -75,6 +75,8 @@ object RepertoireViewerRoutes extends BaseRoutes {
   def renderViewer(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document) = {
     val id = repertoire.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
     val name = repertoire.getString("name")
+    val sourceAuthor = repertoire.get("sourceAuthor").map(_.asString().getValue).getOrElse("")
+    val studyUrl = repertoire.get("studyUrl").map(_.asString().getValue).getOrElse("")
 
     html(lang := "en", cls := "dark", style := "--zoom:90;")(
       head(
@@ -102,13 +104,31 @@ object RepertoireViewerRoutes extends BaseRoutes {
                 tag("sg-hand-wrap")(attr("id") := "hand-bottom")
               )
             ),
+            div(cls := "puzzle__comment", attr("id") := "comment-card")(
+              h2(cls := "puzzle__comment__title")(name),
+              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
+                div(cls := "puzzle__comment__source small text-muted mb-2")(
+                  if (sourceAuthor.nonEmpty) frag(
+                    i(cls := "bi bi-person me-1"),
+                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank", cls := "text-muted")(sourceAuthor)
+                  ) else frag(),
+                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
+                  if (studyUrl.nonEmpty) frag(
+                    i(cls := "bi bi-book me-1"),
+                    a(href := studyUrl, attr("target") := "_blank", cls := "text-muted")("Lishogi Study")
+                  ) else frag()
+                )
+              } else frag(),
+              div(attr("id") := "comment-display", style := "display:none;")
+            ),
             div(cls := "puzzle__side")(
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
                     div(cls := "analyse__tools__menu")(
-                      button(cls := "btn btn-sm btn-outline-light me-2", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
-                      button(cls := "btn btn-sm btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left"))
+                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
+                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
+                      button(cls := "btn btn-sm btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right"))
                     ),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
@@ -119,9 +139,7 @@ object RepertoireViewerRoutes extends BaseRoutes {
                     )
                   )
                 ),
-                div(cls := "puzzle__feedback")(
-                  h2(name)
-                )
+                div(cls := "puzzle__feedback")()
               )
             )
           )

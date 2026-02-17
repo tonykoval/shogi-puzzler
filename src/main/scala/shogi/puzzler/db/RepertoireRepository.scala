@@ -25,14 +25,14 @@ object RepertoireRepository {
       case None => or(equal("ownerEmail", null), equal("ownerEmail", ""), exists("ownerEmail", false))
     }
     logger.debug(s"Fetching repertoires for ownerEmail: $ownerEmail")
-    collection.find(filter).toFuture()
+    collection.find(filter).projection(exclude("nodes")).toFuture()
   }
 
   def getRepertoire(id: String): Future[Option[Document]] = {
     collection.find(equal("_id", new ObjectId(id))).headOption()
   }
 
-  def createRepertoire(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None, rootSfen: Option[String] = None): Future[String] = {
+  def createRepertoire(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None, rootSfen: Option[String] = None, rootComment: Option[String] = None, sourceUrl: Option[String] = None, sourceAuthor: Option[String] = None, studyUrl: Option[String] = None, studyName: Option[String] = None): Future[String] = {
     logger.info(s"Creating repertoire: name=$name, ownerEmail=$ownerEmail, isAutoReload=$isAutoReload, reloadThreshold=$reloadThreshold, reloadColor=$reloadColor")
     val sfen = rootSfen.getOrElse(
       scala.util.Try(shogi.variant.Standard.initialSfen.value).getOrElse("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
@@ -43,8 +43,13 @@ object RepertoireRepository {
       "isAutoReload" -> isAutoReload,
       "reloadThreshold" -> reloadThreshold,
       "nodes" -> Document()
-    ) ++ ownerEmail.map(email => Document("ownerEmail" -> email)).getOrElse(Document()) ++ 
-      reloadColor.map(color => Document("reloadColor" -> color)).getOrElse(Document())
+    ) ++ ownerEmail.map(email => Document("ownerEmail" -> email)).getOrElse(Document()) ++
+      reloadColor.map(color => Document("reloadColor" -> color)).getOrElse(Document()) ++
+      rootComment.map(c => Document("rootComment" -> c)).getOrElse(Document()) ++
+      sourceUrl.map(u => Document("sourceUrl" -> u)).getOrElse(Document()) ++
+      sourceAuthor.map(a => Document("sourceAuthor" -> a)).getOrElse(Document()) ++
+      studyUrl.map(u => Document("studyUrl" -> u)).getOrElse(Document()) ++
+      studyName.map(n => Document("studyName" -> n)).getOrElse(Document())
     collection.insertOne(doc).toFuture().map { res => 
       val id = res.getInsertedId.asObjectId().getValue.toString
       logger.info(s"Inserted repertoire with id: $id")
@@ -189,6 +194,13 @@ object RepertoireRepository {
     collection.updateOne(
       equal("_id", new ObjectId(id)),
       set("nodes", Document())
+    ).toFuture().map(_ => ())
+  }
+
+  def updateRootComment(id: String, comment: String): Future[Unit] = {
+    collection.updateOne(
+      equal("_id", new ObjectId(id)),
+      set("rootComment", comment)
     ).toFuture().map(_ => ())
   }
 

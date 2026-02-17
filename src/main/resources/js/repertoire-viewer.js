@@ -4,6 +4,44 @@ let repertoire;
 let currentSfen;
 let history = [];
 const repertoireId = document.getElementById('repertoireId').value;
+let lastMoveComment = null;
+
+function parseAnnotations(comment) {
+    if (!comment) return { text: '', shapes: [] };
+
+    const shapes = [];
+    const colorMap = { G: 'green', B: 'blue', R: 'red', Y: 'yellow' };
+
+    const calRegex = /\[%cal\s+([^\]]+)\]/g;
+    let match;
+    while ((match = calRegex.exec(comment)) !== null) {
+        match[1].split(',').forEach(token => {
+            token = token.trim();
+            if (token.length >= 5) {
+                const brush = colorMap[token[0]] || 'green';
+                const orig = token[1] + token[2];
+                const dest = token[3] + token[4];
+                shapes.push({ orig, dest, brush });
+            }
+        });
+    }
+
+    const cslRegex = /\[%csl\s+([^\]]+)\]/g;
+    while ((match = cslRegex.exec(comment)) !== null) {
+        match[1].split(',').forEach(token => {
+            token = token.trim();
+            if (token.length >= 3) {
+                const brush = colorMap[token[0]] || 'green';
+                const orig = token[1] + token[2];
+                shapes.push({ orig, dest: orig, brush });
+            }
+        });
+    }
+
+    const text = comment.replace(/\[%cal\s+[^\]]+\]/g, '').replace(/\[%csl\s+[^\]]+\]/g, '').trim();
+
+    return { text, shapes };
+}
 
 function formatMoveText(usi, pos) {
     const parsed = Shogiops.parseUsi(usi);
@@ -37,9 +75,16 @@ async function loadRepertoire(lastMoveUsi) {
 function updateMenuState() {
     const revertBtn = document.querySelector('button[onclick="revertMove()"]');
     const toRootBtn = document.querySelector('button[onclick="toRoot()"]');
+    const advanceBtn = document.querySelector('button[onclick="advanceMove()"]');
 
     if (revertBtn) revertBtn.disabled = history.length === 0;
     if (toRootBtn) toRootBtn.disabled = currentSfen === repertoire.rootSfen;
+
+    if (advanceBtn) {
+        const nodeKey = sanitizeSfen(currentSfen);
+        const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+        advanceBtn.disabled = node.moves.length !== 1;
+    }
 }
 
 function renderBoard(lastMoveUsi) {
@@ -107,7 +152,10 @@ function sanitizeSfen(sfen) {
 
 function formatComment(comment) {
     if (!comment) return "";
-    return comment.split('\n').map(line => {
+    const { text } = parseAnnotations(comment);
+    if (!text) return "";
+    return text.split('\n').map(line => {
+        if (!line.trim()) return "";
         let cls = "";
         let icon = "";
         if (line.startsWith("Blunder")) {
@@ -131,7 +179,26 @@ function formatComment(comment) {
     }).join("");
 }
 
+function updateCommentDisplay() {
+    const panel = document.getElementById('comment-display');
+    if (!panel) return;
+
+    const comment = lastMoveComment || (currentSfen === repertoire?.rootSfen ? repertoire?.rootComment : null);
+
+    if (comment) {
+        const { text } = parseAnnotations(comment);
+        if (text) {
+            panel.innerHTML = formatComment(comment);
+            panel.style.display = 'block';
+            return;
+        }
+    }
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+}
+
 function displayMoveArrows() {
+    updateCommentDisplay();
     if (!sg) return;
     if (!repertoire || !repertoire.nodes) {
         sg.setAutoShapes([]);
@@ -141,11 +208,10 @@ function displayMoveArrows() {
     const nodeKey = sanitizeSfen(currentSfen);
     const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
-    const brushes = ['green', 'blue', 'yellow', 'red'];
     const shapes = [];
 
     node.moves.forEach((move, index) => {
-        const brush = brushes[Math.min(index, brushes.length - 1)];
+        const brush = 'dark';
         const parsed = Shogiops.parseUsi(move.usi);
         if (parsed) {
             if (parsed.role) {
@@ -155,6 +221,12 @@ function displayMoveArrows() {
             }
         }
     });
+
+    // Add annotation shapes from the last played move's comment
+    if (lastMoveComment) {
+        const { shapes: annotationShapes } = parseAnnotations(lastMoveComment);
+        shapes.push(...annotationShapes);
+    }
 
     sg.setAutoShapes(shapes);
 }
@@ -184,6 +256,7 @@ function renderVariations() {
             moveElem.innerText = moveText;
             moveElem.className = 'btn btn-sm btn-outline-light me-1 mb-1';
             moveElem.onclick = () => {
+                lastMoveComment = move.comment || null;
                 history.push(currentSfen);
                 currentSfen = move.nextSfen;
                 renderBoard(move.usi);
@@ -210,6 +283,7 @@ function renderVariations() {
 
 export function revertMove() {
     if (history.length > 0) {
+        lastMoveComment = null;
         currentSfen = history.pop();
         renderBoard();
         renderVariations();
@@ -220,6 +294,7 @@ export function revertMove() {
 
 export function toRoot() {
     if (currentSfen !== repertoire.rootSfen) {
+        lastMoveComment = null;
         history = [];
         currentSfen = repertoire.rootSfen;
         renderBoard();
@@ -229,7 +304,35 @@ export function toRoot() {
     }
 }
 
+export function advanceMove() {
+    if (!repertoire || !repertoire.nodes) return;
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire.nodes[nodeKey]) || { moves: [] };
+    if (node.moves.length === 1) {
+        const move = node.moves[0];
+        lastMoveComment = move.comment || null;
+        history.push(currentSfen);
+        currentSfen = move.nextSfen;
+        renderBoard(move.usi);
+        renderVariations();
+        updateMenuState();
+        displayMoveArrows();
+    }
+}
+
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        revertMove();
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        advanceMove();
+    }
+});
+
 window.revertMove = revertMove;
 window.toRoot = toRoot;
+window.advanceMove = advanceMove;
 
 loadRepertoire();
