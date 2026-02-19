@@ -132,6 +132,30 @@ object PuzzleRepository {
     ).toFuture()
   }
 
+  def savePuzzleTranslation(id: String, lang: String, comment: Option[String], moveComments: Map[String, String]): Future[UpdateResult] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import org.mongodb.scala.bson.BsonString
+    import org.mongodb.scala.bson.collection.immutable.Document
+
+    val updates = scala.collection.mutable.ListBuffer[org.bson.conversions.Bson]()
+
+    comment.foreach { c =>
+      updates += Updates.set(s"comments_i18n.$lang", c)
+    }
+
+    if (moveComments.nonEmpty) {
+      val moveCommentsDoc = Document(moveComments.map { case (k, v) => k -> BsonString(v) })
+      updates += Updates.set(s"move_comments_i18n.$lang", moveCommentsDoc)
+    }
+
+    updates += Updates.set("updated_at", System.currentTimeMillis())
+
+    puzzlesCollection.updateOne(
+      Filters.equal("_id", new org.bson.types.ObjectId(id)),
+      Updates.combine(updates.toList: _*)
+    ).toFuture()
+  }
+
   def deletePuzzle(id: String, userEmail: String): Future[org.mongodb.scala.result.DeleteResult] = {
     puzzlesCollection.deleteOne(
       org.mongodb.scala.model.Filters.and(
@@ -642,6 +666,16 @@ object PuzzleRepository {
         new BsonArray(tagsBson)
       })
       .append("created_at", new BsonDateTime(createdAt))
+
+    // Pass through i18n translation fields
+    puzzle.get("comments_i18n") match {
+      case Some(v) if v.isDocument => bsonDoc.append("comments_i18n", v.asDocument())
+      case _ =>
+    }
+    puzzle.get("move_comments_i18n") match {
+      case Some(v) if v.isDocument => bsonDoc.append("move_comments_i18n", v.asDocument())
+      case _ =>
+    }
 
     // Pass through rating fields
     val playCount = puzzle.get("play_count") match {

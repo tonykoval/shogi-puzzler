@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{UserRepository, User, SettingsRepository}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -25,14 +26,15 @@ object UserManagementRoutes extends BaseRoutes {
     withAuth(request, "admin/users") { email =>
       val users = Await.result(UserRepository.getAllUsers(), 10.seconds)
       val settings = Await.result(SettingsRepository.getAppSettings(Some(email)), 10.seconds)
+      val pageLang = getLang(request)
       cask.Response(
-        renderUsersPage(Some(email), users, settings).render,
+        renderUsersPage(Some(email), users, settings, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
   }
 
-  def renderUsersPage(userEmail: Option[String], users: Seq[User], settings: shogi.puzzler.db.AppSettings) = {
+  def renderUsersPage(userEmail: Option[String], users: Seq[User], settings: shogi.puzzler.db.AppSettings, pageLang: String = I18n.defaultLang) = {
     val adminEmail = config.getString("app.security.admin-email")
     val globalSettings = Await.result(SettingsRepository.getAppSettings(Some("global")), 10.seconds)
     val select2Script = script(raw(
@@ -47,7 +49,7 @@ object UserManagementRoutes extends BaseRoutes {
         |});
         |""".stripMargin))
 
-    Components.layout("User Management", userEmail, settings, appVersion, scripts = Seq(select2Script))(
+    Components.layout("User Management", userEmail, settings, appVersion, lang = pageLang, scripts = Seq(select2Script))(
       h1(cls := "mb-4")("User Management"),
       div(cls := "card bg-dark text-light border-secondary mb-4")(
         div(cls := "card-header border-secondary")("Global Settings"),

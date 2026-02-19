@@ -7,6 +7,7 @@ object MaintenanceApp extends cask.Main {
   
   override def allRoutes = Seq(
     LoginRoutes,
+    AboutRoutes,
     MaintenanceRoutes,
     ViewerRoutes,
     TrainingRoutes,
@@ -15,6 +16,8 @@ object MaintenanceApp extends cask.Main {
     RepertoireViewerRoutes,
     ConfigRoutes,
     UserManagementRoutes,
+    LangRoutes,
+    TranslateRoutes,
     StaticRoutes,
     RootRoutes
   )

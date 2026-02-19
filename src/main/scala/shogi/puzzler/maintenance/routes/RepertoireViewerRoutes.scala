@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{RepertoireRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -10,23 +11,25 @@ import scala.concurrent.duration._
 object RepertoireViewerRoutes extends BaseRoutes {
 
   @cask.get("/repertoire-viewer")
-  def index(request: cask.Request) = {
+  def index(lang: Option[String] = None, request: cask.Request) = {
     val userEmail = getSessionUserEmail(request)
     val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+    val pageLang = getLang(request)
     val repertoires = Await.result(RepertoireRepository.getPublicRepertoires(), 10.seconds)
 
     cask.Response(
-      renderListingPage(userEmail, settings, repertoires).render,
-      headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+      renderListingPage(userEmail, settings, repertoires, pageLang).render,
+      headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ langCookieHeaders(request)
     )
   }
 
-  def renderListingPage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document]) = {
+  def renderListingPage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document], pageLang: String = I18n.defaultLang) = {
     Components.layout(
       "Public Repertoires",
       userEmail,
       settings,
-      appVersion
+      appVersion,
+      lang = pageLang
     )(
       div(cls := "d-flex justify-content-between align-items-center mb-4")(
         h1("Public Repertoires")
@@ -57,22 +60,23 @@ object RepertoireViewerRoutes extends BaseRoutes {
   }
 
   @cask.get("/repertoire-viewer/:id")
-  def view(id: String, request: cask.Request) = {
+  def view(id: String, lang: Option[String] = None, request: cask.Request) = {
     val userEmail = getSessionUserEmail(request)
     val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+    val pageLang = getLang(request)
     val repertoire = Await.result(RepertoireRepository.getPublicRepertoire(id), 10.seconds)
 
     repertoire match {
       case Some(rep) =>
         cask.Response(
-          renderViewer(userEmail, settings, rep).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+          renderViewer(userEmail, settings, rep, pageLang).render,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ langCookieHeaders(request)
         )
       case None => cask.Response("Not Found", statusCode = 404)
     }
   }
 
-  def renderViewer(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document) = {
+  def renderViewer(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document, pageLang: String = I18n.defaultLang) = {
     val id = repertoire.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
     val name = repertoire.getString("name")
     val sourceAuthor = repertoire.get("sourceAuthor").map(_.asString().getValue).getOrElse("")
@@ -94,8 +98,25 @@ object RepertoireViewerRoutes extends BaseRoutes {
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
-        Components.renderHeader(userEmail, settings, appVersion),
+        Components.renderHeader(userEmail, settings, appVersion, pageLang),
         div(attr("id") := "main-wrap")(
+          div(cls := "rp-main-col")(
+            div(cls := "puzzle__board-header")(
+              h2(cls := "puzzle__board-header__title")(name),
+              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
+                div(cls := "puzzle__board-header__source")(
+                  if (sourceAuthor.nonEmpty) frag(
+                    i(cls := "bi bi-person me-1"),
+                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank")(sourceAuthor)
+                  ) else frag(),
+                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
+                  if (studyUrl.nonEmpty) frag(
+                    i(cls := "bi bi-book me-1"),
+                    a(href := studyUrl, attr("target") := "_blank")("Lishogi Study")
+                  ) else frag()
+                )
+              } else frag()
+            ),
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
               div(cls := "sg-wrap d-9x9")(
@@ -105,31 +126,22 @@ object RepertoireViewerRoutes extends BaseRoutes {
               )
             ),
             div(cls := "puzzle__comment", attr("id") := "comment-card")(
-              h2(cls := "puzzle__comment__title")(name),
-              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
-                div(cls := "puzzle__comment__source small text-muted mb-2")(
-                  if (sourceAuthor.nonEmpty) frag(
-                    i(cls := "bi bi-person me-1"),
-                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank", cls := "text-muted")(sourceAuthor)
-                  ) else frag(),
-                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
-                  if (studyUrl.nonEmpty) frag(
-                    i(cls := "bi bi-book me-1"),
-                    a(href := studyUrl, attr("target") := "_blank", cls := "text-muted")("Lishogi Study")
-                  ) else frag()
+              div(cls := "puzzle__controls mb-2")(
+                div(cls := "analyse__tools")(
+                  div(cls := "analyse__tools__menu")(
+                    button(cls := "btn btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
+                    button(cls := "btn btn-outline-light", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
+                    button(cls := "btn btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right"))
+                  )
                 )
-              } else frag(),
+              ),
               div(attr("id") := "comment-display", style := "display:none;")
             ),
+
             div(cls := "puzzle__side")(
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
-                    div(cls := "analyse__tools__menu")(
-                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
-                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
-                      button(cls := "btn btn-sm btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right"))
-                    ),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
                         div(attr("id") := "variation-list")(
@@ -143,6 +155,7 @@ object RepertoireViewerRoutes extends BaseRoutes {
               )
             )
           )
+          )  // end main / rp-main-col
         ),
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),

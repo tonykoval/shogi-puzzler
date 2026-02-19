@@ -4,6 +4,7 @@ import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{RepertoireRepository, SettingsRepository, AppSettings}
 import shogi.puzzler.game.GameLoader
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -34,16 +35,17 @@ object RepertoireRoutes extends BaseRoutes {
     withAuth(request, "repertoire") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val pageLang = getLang(request)
       val repertoires = Await.result(RepertoireRepository.getRepertoires(userEmail), 10.seconds)
-      
+
       cask.Response(
-        renderRepertoirePage(userEmail, settings, repertoires).render,
+        renderRepertoirePage(userEmail, settings, repertoires, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
   }
 
-  def renderRepertoirePage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document]) = {
+  def renderRepertoirePage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document], pageLang: String = I18n.defaultLang) = {
     // Group repertoires: those with studyUrl grouped together, standalone ones separate
     val (studyReps, standaloneReps) = repertoires.partition(_.get("studyUrl").exists(v => v.isString && v.asString().getValue.nonEmpty))
     val studyGroups = studyReps.groupBy(_.get("studyUrl").map(_.asString().getValue).getOrElse("")).toSeq.sortBy(_._1)
@@ -53,6 +55,7 @@ object RepertoireRoutes extends BaseRoutes {
       userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
@@ -780,6 +783,7 @@ object RepertoireRoutes extends BaseRoutes {
     withAuth(request, "repertoire") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val pageLang = getLang(request)
       val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
 
       repertoire match {
@@ -789,7 +793,7 @@ object RepertoireRoutes extends BaseRoutes {
             cask.Response("Forbidden", statusCode = 403)
           } else {
             cask.Response(
-              renderRepertoireEditor(userEmail, settings, rep).render,
+              renderRepertoireEditor(userEmail, settings, rep, pageLang).render,
               headers = Seq("Content-Type" -> "text/html; charset=utf-8")
             )
           }
@@ -798,7 +802,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  def renderRepertoireEditor(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document) = {
+  def renderRepertoireEditor(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document, pageLang: String = I18n.defaultLang) = {
     val id = repertoire.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
     val name = repertoire.getString("name")
     val sourceUrl = repertoire.get("sourceUrl").map(_.asString().getValue).getOrElse("")
@@ -821,7 +825,7 @@ object RepertoireRoutes extends BaseRoutes {
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
-        Components.renderHeader(userEmail, settings, appVersion),
+        Components.renderHeader(userEmail, settings, appVersion, pageLang),
         div(attr("id") := "main-wrap")(
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
@@ -832,34 +836,37 @@ object RepertoireRoutes extends BaseRoutes {
               )
             ),
             div(cls := "puzzle__comment", attr("id") := "comment-card")(
+              div(cls := "puzzle__controls mb-2")(
+                div(cls := "analyse__tools")(
+                  div(cls := "analyse__tools__menu")(
+                    button(cls := "btn btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
+                    button(cls := "btn btn-outline-light", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
+                    button(cls := "btn btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right")),
+                    button(cls := "btn btn-outline-info", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#analyzeModal", title := "Analyze position with engine")(i(cls := "bi bi-cpu"), tag("span")(cls := "d-none d-md-inline ms-1")("Analyze"))
+                  )
+                )
+              ),
               h2(cls := "puzzle__comment__title")(name),
               if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
-                div(cls := "puzzle__comment__source small text-muted mb-2")(
+                div(cls := "puzzle__comment__source small mb-2")(
                   if (sourceAuthor.nonEmpty) frag(
                     i(cls := "bi bi-person me-1"),
-                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank", cls := "text-muted")(sourceAuthor)
+                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank")(sourceAuthor)
                   ) else frag(),
                   if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
                   if (studyUrl.nonEmpty) frag(
                     i(cls := "bi bi-book me-1"),
-                    a(href := studyUrl, attr("target") := "_blank", cls := "text-muted")("Lishogi Study")
+                    a(href := studyUrl, attr("target") := "_blank")("Lishogi Study")
                   ) else frag()
                 )
               } else frag(),
               div(attr("id") := "comment-display", style := "display:none;")
             ),
+
             div(cls := "puzzle__side")(
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
-                    div(cls := "analyse__tools__menu")(
-                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
-                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
-                      button(cls := "btn btn-sm btn-outline-light me-1", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right")),
-                      div(cls := "ms-auto")(
-                        button(cls := "btn btn-sm btn-outline-info", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#analyzeModal", title := "Analyze position with engine")(i(cls := "bi bi-cpu me-1"), tag("span")(cls := "d-none d-lg-inline")("Analyze"))
-                      )
-                    ),
                     div(cls := "analyse__engine-results", attr("id") := "engine-results", style := "display:none;"),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
@@ -1103,6 +1110,32 @@ object RepertoireRoutes extends BaseRoutes {
         }
 
         cask.Response(ujson.Obj("success" -> true, "importedCount" -> importedCount))
+      }
+    }
+  }
+
+  @cask.post("/repertoire/:id/move/translate")
+  def translateMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        try {
+          val json       = ujson.read(request.text())
+          val parentSfen = json("parentSfen").str
+          val usi        = json("usi").str
+          val lang       = json("lang").str
+          val comment    = json("comment").str
+
+          Await.result(RepertoireRepository.saveMovei18nComment(id, parentSfen, usi, lang, comment), 10.seconds)
+          cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
+        } catch {
+          case e: Exception =>
+            logger.error(s"Error saving move translation for repertoire $id", e)
+            cask.Response(
+              ujson.Obj("error" -> Option(e.getMessage).getOrElse("Unknown error")),
+              statusCode = 500,
+              headers = Seq("Content-Type" -> "application/json")
+            )
+        }
       }
     }
   }

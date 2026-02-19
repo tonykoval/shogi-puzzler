@@ -426,27 +426,90 @@ function renderVariations() {
             commentContainer.className = 'mt-1';
 
             if (editingCommentUsi === move.usi) {
-                const textarea = document.createElement('textarea');
-                textarea.className = 'form-control form-control-sm bg-dark text-light border-secondary';
-                textarea.rows = 3;
-                textarea.value = move.comment || '';
-                textarea.id = 'inline-comment-textarea';
-                commentContainer.appendChild(textarea);
+                const tabUid = move.usi.replace(/[^a-zA-Z0-9]/g, '_');
 
-                const btnGroup = document.createElement('div');
-                btnGroup.className = 'mt-1';
+                // Outer card wrapper
+                const editorWrap = document.createElement('div');
+                editorWrap.style.cssText = 'background:#191714; border:1px solid #3a3632; border-radius:8px; padding:10px 12px; margin-top:6px;';
+
+                // Tab nav
+                const tabNav = document.createElement('ul');
+                tabNav.className = 'nav mb-2';
+                tabNav.style.cssText = 'gap:2px; border-bottom:1px solid #3a3632; padding-bottom:6px;';
+                tabNav.innerHTML = `
+                    <li class="nav-item">
+                        <button class="nav-link active py-1 px-3" data-tab="en" data-uid="${tabUid}"
+                            style="font-size:0.8em; background:#2e2b28; color:#e0dbd5; border-radius:5px; border:1px solid #4a4744;">
+                            🇬🇧 EN
+                        </button>
+                    </li>
+                    <li class="nav-item">
+                        <button class="nav-link py-1 px-3" data-tab="sk" data-uid="${tabUid}"
+                            style="font-size:0.8em; background:transparent; color:#888; border-radius:5px; border:1px solid transparent;">
+                            🇸🇰 SK
+                        </button>
+                    </li>`;
+                editorWrap.appendChild(tabNav);
+
+                // Helper: build a styled auto-resizing textarea
+                function makeCommentTextarea(id, value, placeholder) {
+                    const ta = document.createElement('textarea');
+                    ta.id = id;
+                    ta.className = 'form-control bg-dark text-light';
+                    ta.style.cssText = [
+                        'border:1px solid #3a3632',
+                        'border-radius:6px',
+                        'font-size:0.875em',
+                        'line-height:1.7',
+                        'resize:none',
+                        'overflow:hidden',
+                        'min-height:88px',
+                        'padding:8px 10px',
+                        'transition:border-color 0.15s, box-shadow 0.15s'
+                    ].join(';');
+                    ta.rows = 4;
+                    ta.value = value;
+                    ta.placeholder = placeholder;
+                    ta.addEventListener('input', () => {
+                        ta.style.height = 'auto';
+                        ta.style.height = ta.scrollHeight + 'px';
+                    });
+                    ta.addEventListener('focus', () => {
+                        ta.style.borderColor = '#5a9fd4';
+                        ta.style.boxShadow = '0 0 0 0.15rem rgba(90,159,212,0.18)';
+                    });
+                    ta.addEventListener('blur', () => {
+                        ta.style.borderColor = '#3a3632';
+                        ta.style.boxShadow = 'none';
+                    });
+                    return ta;
+                }
+
+                // EN pane
+                const enPane = document.createElement('div');
+                enPane.id = `comment-pane-en-${tabUid}`;
+
+                const textarea = makeCommentTextarea('inline-comment-textarea', move.comment || '', 'Comment for this move… (Ctrl+Enter to save)');
+                textarea.addEventListener('keydown', (e) => {
+                    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); saveMoveComment(currentSfen, move.usi, move.isPuzzle); }
+                });
+                enPane.appendChild(textarea);
+
+                const enFooter = document.createElement('div');
+                enFooter.className = 'd-flex justify-content-between align-items-center mt-2';
+                enFooter.innerHTML = `<small style="color:#555; font-size:0.7em;"><i class="bi bi-keyboard me-1"></i>Ctrl+Enter to save</small>`;
+
+                const enBtns = document.createElement('div');
+                enBtns.className = 'd-flex gap-1';
 
                 const saveBtn = document.createElement('button');
-                saveBtn.className = 'btn btn-sm btn-success me-1';
-                saveBtn.textContent = 'Save';
-                saveBtn.onclick = (e) => {
-                    e.stopPropagation();
-                    saveMoveComment(currentSfen, move.usi, move.isPuzzle);
-                };
+                saveBtn.className = 'btn btn-sm btn-success';
+                saveBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save';
+                saveBtn.onclick = (e) => { e.stopPropagation(); saveMoveComment(currentSfen, move.usi, move.isPuzzle); };
 
                 const cancelBtn = document.createElement('button');
-                cancelBtn.className = 'btn btn-sm btn-secondary';
-                cancelBtn.textContent = 'Cancel';
+                cancelBtn.className = 'btn btn-sm btn-outline-secondary';
+                cancelBtn.innerHTML = '<i class="bi bi-x me-1"></i>Cancel';
                 cancelBtn.onclick = (e) => {
                     e.stopPropagation();
                     editingCommentUsi = null;
@@ -454,9 +517,107 @@ function renderVariations() {
                     displayMoveArrows();
                 };
 
-                btnGroup.appendChild(saveBtn);
-                btnGroup.appendChild(cancelBtn);
-                commentContainer.appendChild(btnGroup);
+                enBtns.appendChild(saveBtn);
+                enBtns.appendChild(cancelBtn);
+                enFooter.appendChild(enBtns);
+                enPane.appendChild(enFooter);
+                editorWrap.appendChild(enPane);
+
+                // SK pane
+                const skPane = document.createElement('div');
+                skPane.id = `comment-pane-sk-${tabUid}`;
+                skPane.style.display = 'none';
+
+                const skTextarea = makeCommentTextarea('inline-comment-textarea-sk',
+                    (move.comment_i18n && move.comment_i18n.sk) ? move.comment_i18n.sk : '',
+                    'Slovak translation… (Ctrl+Enter to save)');
+                skTextarea.addEventListener('keydown', (e) => {
+                    if (e.ctrlKey && e.key === 'Enter') { e.preventDefault(); saveMoveTranslation(currentSfen, move.usi, 'sk', skTextarea.value); }
+                });
+                skPane.appendChild(skTextarea);
+
+                const skFooter = document.createElement('div');
+                skFooter.className = 'd-flex justify-content-between align-items-center mt-2';
+                skFooter.innerHTML = `<small style="color:#555; font-size:0.7em;"><i class="bi bi-keyboard me-1"></i>Ctrl+Enter to save</small>`;
+
+                const skBtns = document.createElement('div');
+                skBtns.className = 'd-flex gap-1';
+
+                const autoTranslateBtn = document.createElement('button');
+                autoTranslateBtn.className = 'btn btn-sm btn-outline-info';
+                autoTranslateBtn.innerHTML = '<i class="bi bi-translate me-1"></i>Auto';
+                autoTranslateBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    const enText = textarea.value || move.comment || '';
+                    if (!enText.trim()) return;
+                    autoTranslateBtn.disabled = true;
+                    autoTranslateBtn.innerHTML = '<i class="bi bi-arrow-repeat me-1"></i>…';
+                    try {
+                        const resp = await fetch('/api/translate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ text: enText, from: 'en', to: 'sk' })
+                        });
+                        const data = await resp.json();
+                        if (data.translated) {
+                            skTextarea.value = data.translated;
+                            skTextarea.dispatchEvent(new Event('input'));
+                        }
+                    } catch (err) {
+                        alert('Auto-translate failed: ' + err.message);
+                    } finally {
+                        autoTranslateBtn.disabled = false;
+                        autoTranslateBtn.innerHTML = '<i class="bi bi-translate me-1"></i>Auto';
+                    }
+                };
+
+                const saveSkBtn = document.createElement('button');
+                saveSkBtn.className = 'btn btn-sm btn-success';
+                saveSkBtn.innerHTML = '<i class="bi bi-check-lg me-1"></i>Save SK';
+                saveSkBtn.onclick = (e) => { e.stopPropagation(); saveMoveTranslation(currentSfen, move.usi, 'sk', skTextarea.value); };
+
+                skBtns.appendChild(autoTranslateBtn);
+                skBtns.appendChild(saveSkBtn);
+                skFooter.appendChild(skBtns);
+                skPane.appendChild(skFooter);
+                editorWrap.appendChild(skPane);
+
+                // Tab switching
+                tabNav.querySelectorAll('[data-tab]').forEach(tabBtn => {
+                    tabBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        tabNav.querySelectorAll('[data-tab]').forEach(b => {
+                            b.classList.remove('active');
+                            b.style.background = 'transparent';
+                            b.style.color = '#888';
+                            b.style.borderColor = 'transparent';
+                        });
+                        tabBtn.classList.add('active');
+                        tabBtn.style.background = '#2e2b28';
+                        tabBtn.style.color = '#e0dbd5';
+                        tabBtn.style.borderColor = '#4a4744';
+                        const tab = tabBtn.dataset.tab;
+                        enPane.style.display = tab === 'en' ? '' : 'none';
+                        skPane.style.display = tab === 'sk' ? '' : 'none';
+                        setTimeout(() => {
+                            const activeTA = tab === 'en' ? textarea : skTextarea;
+                            activeTA.style.height = 'auto';
+                            activeTA.style.height = activeTA.scrollHeight + 'px';
+                            activeTA.focus();
+                        }, 0);
+                    });
+                });
+
+                commentContainer.appendChild(editorWrap);
+
+                // Init heights + focus after render
+                setTimeout(() => {
+                    [textarea, skTextarea].forEach(ta => {
+                        ta.style.height = 'auto';
+                        ta.style.height = ta.scrollHeight + 'px';
+                    });
+                    textarea.focus();
+                }, 0);
             } else {
                 if (move.comment) {
                     const commentDiv = document.createElement('div');
@@ -578,6 +739,24 @@ async function saveMoveComment(parentSfen, usi, isPuzzle) {
         await loadRepertoire();
     } catch (e) {
         console.error('Error saving comment:', e);
+        alert('Error: ' + e.message);
+    }
+}
+
+async function saveMoveTranslation(parentSfen, usi, lang, comment) {
+    try {
+        const response = await fetch(`/repertoire/${repertoireId}/move/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parentSfen, usi, lang, comment })
+        });
+
+        if (!response.ok) throw new Error('Failed to save translation');
+
+        editingCommentUsi = null;
+        await loadRepertoire();
+    } catch (e) {
+        console.error('Error saving translation:', e);
         alert('Error: ' + e.message);
     }
 }

@@ -8,6 +8,7 @@ import shogi.puzzler.engine.{EngineManager, Limit}
 import shogi.puzzler.analysis.{AnalysisService, SfenUtils}
 import shogi.puzzler.maintenance.routes.MaintenanceRoutes.getEngineManager
 import shogi.puzzler.ui.Components
+import shogi.puzzler.i18n.I18n
 
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -21,6 +22,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val pageLang = getLang(request)
       val puzzles = game match {
         case Some(hash) if hash.nonEmpty =>
           Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
@@ -43,7 +45,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         case _ => Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds).size.toLong
       }
       cask.Response(
-        renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, status, reviewCount).render,
+        renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, status, reviewCount, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -54,8 +56,9 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val pageLang = getLang(request)
       cask.Response(
-        renderPuzzleEditor(userEmail, settings, None).render,
+        renderPuzzleEditor(userEmail, settings, None, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -66,11 +69,12 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      val pageLang = getLang(request)
       val puzzle = Await.result(PuzzleRepository.getPuzzle(id, email), 10.seconds)
       puzzle match {
         case Some(doc) =>
           cask.Response(
-            renderPuzzleEditor(userEmail, settings, Some(doc)).render,
+            renderPuzzleEditor(userEmail, settings, Some(doc), pageLang).render,
             headers = Seq("Content-Type" -> "text/html; charset=utf-8")
           )
         case None =>
@@ -79,12 +83,13 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     }
   }
 
-  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument], gameFilter: Option[String] = None, gameInfo: Option[org.mongodb.scala.Document] = None, statusFilter: Option[String] = None, reviewCount: Long = 0) = {
+  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument], gameFilter: Option[String] = None, gameInfo: Option[org.mongodb.scala.Document] = None, statusFilter: Option[String] = None, reviewCount: Long = 0, pageLang: String = I18n.defaultLang) = {
     Components.layout(
       "Puzzle Editor",
       userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         raw(tag("style")("""
           .puzzle-card {
@@ -333,7 +338,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     )
   }
 
-  def renderPuzzleEditor(userEmail: Option[String] = None, settings: AppSettings, puzzle: Option[BsonDocument] = None) = {
+  def renderPuzzleEditor(userEmail: Option[String] = None, settings: AppSettings, puzzle: Option[BsonDocument] = None, pageLang: String = I18n.defaultLang) = {
     html(lang := "en", cls := "dark", style := "--zoom:90;")(
       head(
         meta(charset := "utf-8"),
@@ -350,7 +355,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js")
       ),
       body(cls := "wood coords-out playing online")(
-        Components.renderHeader(userEmail, settings, appVersion),
+        Components.renderHeader(userEmail, settings, appVersion, pageLang),
         div(id := "main-wrap")(
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
@@ -781,6 +786,34 @@ object PuzzleCreatorRoutes extends BaseRoutes {
               statusCode = 500
             )
         }
+      }
+    }
+  }
+
+  @cask.post("/puzzle-creator/translate")
+  def translatePuzzle(request: cask.Request) = {
+    withAuthJson(request, "puzzle-creator") { _ =>
+      try {
+        val json = ujson.read(request.text())
+        val id      = json("id").str
+        val lang    = json("lang").str
+        val comment = json.obj.get("comment").map(_.str).filter(_.nonEmpty)
+        val moveComments = json.obj.get("moveComments")
+          .flatMap(mc => scala.util.Try(mc.obj.map { case (k, v) => k -> v.str }.toMap).toOption)
+          .getOrElse(Map.empty[String, String])
+
+        Await.result(PuzzleRepository.savePuzzleTranslation(id, lang, comment, moveComments), 10.seconds)
+        cask.Response(
+          ujson.Obj("success" -> true),
+          headers = Seq("Content-Type" -> "application/json")
+        )
+      } catch {
+        case e: Exception =>
+          cask.Response(
+            ujson.Obj("error" -> Option(e.getMessage).getOrElse("Unknown error")),
+            statusCode = 500,
+            headers = Seq("Content-Type" -> "application/json")
+          )
       }
     }
   }

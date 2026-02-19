@@ -32,15 +32,18 @@ function loadStats() {
 }
 
 function updateSessionProgress() {
-    $('#session-progress').text('Session: ' + sessionSolved + ' solved, ' + sessionCorrect + ' correct');
+    const i18n = window.i18n || {};
+    $('#session-progress').text((i18n['training.session'] || 'Session: {solved} solved, {correct} correct')
+        .replace('{solved}', sessionSolved)
+        .replace('{correct}', sessionCorrect));
 }
 
 function loadNextPuzzle() {
     puzzleResolved = false;
     $('#next-training-btn').hide();
-    $('#training-message').html('<span class="spinner-border spinner-border-sm me-2"></span>Loading...');
+    const i18n = window.i18n || {};
+    $('#training-message').html('<span class="spinner-border spinner-border-sm me-2"></span>' + (i18n['common.loading'] || 'Loading...'));
     $('#card-info').hide();
-
     $.ajax({
         url: '/training/next',
         dataType: 'json',
@@ -60,7 +63,7 @@ function loadNextPuzzle() {
             // Show board areas, hide empty state
             $('#empty-state').hide();
             $('.puzzle__board, .puzzle__controls, .puzzle__side').show();
-            $('#training-message').html('<b>Play the correct move!</b>');
+            $('#training-message').html('<b>' + (i18n['viewer.playCorrectMove'] || 'Play the correct move!') + '</b>');
 
             // Show card info
             $('#card-ef').text(currentCard.ease_factor.toFixed(2));
@@ -72,13 +75,13 @@ function loadNextPuzzle() {
             if (currentPuzzle.is_puzzle && currentPuzzle.puzzle_name) {
                 $('#players-text').html('<i class="bi bi-puzzle-fill me-1" style="color: #ffc107;"></i>' + currentPuzzle.puzzle_name);
             } else {
-                $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (currentPuzzle.sente || "?") + " vs " + (currentPuzzle.gote || "?"));
+                $('#players-text').html('<i class="bi bi-people-fill me-1"></i>' + (currentPuzzle.sente || "?") + " " + ((window.i18n && window.i18n['common.vs']) || 'vs') + " " + (currentPuzzle.gote || "?"));
             }
             if (currentPuzzle.tags && Array.isArray(currentPuzzle.tags) && currentPuzzle.tags.length > 0) {
                 const tagBadges = currentPuzzle.tags.map(t => '<span class="badge bg-info text-dark me-1" style="font-size:0.7em;">' + t + '</span>').join('');
                 $('#players-text').append('<div class="mt-1">' + tagBadges + '</div>');
             }
-            $('#turn-text').text(currentPuzzle.player === "sente" ? "Sente to play" : "Gote to play");
+            $('#turn-text').text(currentPuzzle.player === "sente" ? (window.i18n && window.i18n['puzzle.senteToMove'] ? window.i18n['puzzle.senteToMove'] : 'Sente to play') : (window.i18n && window.i18n['puzzle.goteToMove'] ? window.i18n['puzzle.goteToMove'] : 'Gote to play'));
 
             // Setup board
             sg = Shogiground();
@@ -90,7 +93,8 @@ function loadNextPuzzle() {
             puzzleStartTime = Date.now();
         },
         error: function() {
-            $('#training-message').html('<span class="text-danger">Failed to load puzzle</span>');
+            const i18n = window.i18n || {};
+            $('#training-message').html('<span class="text-danger">' + (i18n['training.failedToLoad'] || 'Failed to load puzzle') + '</span>');
         }
     });
 }
@@ -101,6 +105,7 @@ function showEmptyState() {
     $('#empty-state').show();
     
     // Get next review time and update the message
+    const i18n = window.i18n || {};
     $.ajax({
         url: '/training/stats',
         dataType: 'json',
@@ -113,20 +118,24 @@ function showEmptyState() {
                 
                 let nextText;
                 if (diffDays <= 0) {
-                    nextText = 'soon';
+                    nextText = i18n['training.soon'] || 'soon';
                 } else if (diffDays === 1) {
-                    nextText = 'tomorrow';
+                    nextText = i18n['training.tomorrow'] || 'tomorrow';
                 } else if (diffDays < 7) {
-                    nextText = 'in ' + diffDays + ' days';
+                    nextText = (i18n['training.inDays'] || 'in {days} days').replace('{days}', diffDays);
                 } else if (diffDays < 30) {
                     const weeks = Math.ceil(diffDays / 7);
-                    nextText = 'in ' + weeks + ' week' + (weeks > 1 ? 's' : '');
+                    const weeksKey = weeks === 1 ? 'training.inWeeks' : 'training.inWeeks_plural';
+                    nextText = (i18n[weeksKey] || (weeks === 1 ? 'in {weeks} week' : 'in {weeks} weeks')).replace('{weeks}', weeks);
                 } else {
                     const months = Math.ceil(diffDays / 30);
-                    nextText = 'in ' + months + ' month' + (months > 1 ? 's' : '');
+                    const monthsKey = months === 1 ? 'training.inMonths' : 'training.inMonths_plural';
+                    nextText = (i18n[monthsKey] || (months === 1 ? 'in {months} month' : 'in {months} months')).replace('{months}', months);
                 }
                 
-                $('#empty-state p').html('No puzzles are due for review right now.<br>Next puzzle will be available ' + nextText + '.<br>Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">Puzzle Viewer</a> using the deck button.');
+                $('#empty-state p').html((i18n['training.noPuzzlesDue'] || 'No puzzles are due for review right now.') + '<br>' + 
+                    (i18n['training.nextPuzzleAvailable'] || 'Next puzzle will be available {time}.').replace('{time}', nextText}) + '<br>' +
+                    (i18n['training.puzzleViewer'] ? 'Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">' + i18n['training.puzzleViewer'] + '</a> using the deck button.' : 'Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">Puzzle Viewer</a> using the deck button.'));
             }
         }
     });
@@ -163,20 +172,20 @@ function resolveTrainingMove(pos, r0, r1, r2, r3) {
     if (r1 !== -1) {
         result = "best_move"; quality = 5;
         sessionCorrect++;
-        showFeedback(true, "Best move!", "text-success");
+        showFeedback(true, (window.i18n && window.i18n['puzzle.bestMove']) || "Best move!", "text-success");
     } else if (r2 !== -1) {
         result = "second"; quality = 3;
         sessionCorrect++;
-        showFeedback(true, "Second best move", "text-info");
+        showFeedback(true, (window.i18n && window.i18n['puzzle.secondBestMove']) || "Second best move", "text-info");
     } else if (r3 !== -1) {
         result = "third"; quality = 2;
-        showFeedback(false, "Third best - not quite!", "text-warning");
+        showFeedback(false, (window.i18n && window.i18n['puzzle.thirdBestMove']) || "Third best - not quite!", "text-warning");
     } else if (r0 !== -1) {
         result = "blunder"; quality = 0;
-        showFeedback(false, "Blunder!", "text-danger");
+        showFeedback(false, (window.i18n && window.i18n['puzzle.blunder']) || "Blunder!", "text-danger");
     } else {
         result = "wrong"; quality = 1;
-        showFeedback(false, "Wrong move", "text-danger");
+        showFeedback(false, (window.i18n && window.i18n['puzzle.wrongMove']) || "Wrong move", "text-danger");
     }
 
     updateSessionProgress();

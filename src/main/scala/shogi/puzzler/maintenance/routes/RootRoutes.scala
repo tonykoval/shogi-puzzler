@@ -11,10 +11,11 @@ import cask._
   */
 object RootRoutes extends BaseRoutes {
   @cask.get("/")
-  def index(request: cask.Request) = {
+  def index(lang: Option[String] = None, request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
       logger.info(s"Root accessed, redirecting to /viewer. Cookies: ${request.cookies.keys.mkString(", ")}")
-      noCacheRedirect("/viewer")
+      val target = lang.map(l => s"/viewer?lang=${java.net.URLEncoder.encode(l, "UTF-8")}").getOrElse("/viewer")
+      noCacheRedirect(target)
     }
   }
 

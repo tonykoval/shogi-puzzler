@@ -58,4 +58,14 @@ app {
     path = "engine/YaneuraOu_NNUE"
     path = ${?ENGINE_PATH}
   }
+
+  github {
+    url = ""
+    url = ${?APP_GITHUB_URL}
+  }
+
+  contact {
+    email = ""
+    email = ${?APP_CONTACT_EMAIL}
+  }
 }

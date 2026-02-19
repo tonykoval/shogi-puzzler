@@ -11,6 +11,7 @@ import java.util.Base64
 import java.nio.charset.StandardCharsets
 import java.net.URI
 import shogi.puzzler.db.UserRepository
+import shogi.puzzler.i18n.I18n
 import scala.concurrent.Await
 import scala.concurrent.duration._
 
@@ -167,6 +168,20 @@ abstract class BaseRoutes extends Routes {
   protected def getSessionUserEmail(request: cask.Request): Option[String] = {
     getSessionUser(request).map(_("email").str)
   }
+
+  /** Extract the user's preferred language: ?lang= query param > lang cookie > default. */
+  protected def getLang(request: cask.Request): String =
+    I18n.validateLang(
+      request.queryParams.get("lang").flatMap(_.headOption)
+        .orElse(request.cookies.get("lang").map(_.value))
+        .getOrElse(I18n.defaultLang)
+    )
+
+  /** Returns a Set-Cookie header for the lang query param when present, so the preference persists. */
+  protected def langCookieHeaders(request: cask.Request): Seq[(String, String)] =
+    request.queryParams.get("lang").flatMap(_.headOption).map { l =>
+      "Set-Cookie" -> s"lang=${I18n.validateLang(l)}; Path=/; SameSite=Strict"
+    }.toSeq
 
   protected def corsResponse[T](data: T): cask.Response[T] = {
     val contentType = data match {

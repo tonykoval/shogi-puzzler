@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{SRSRepository, PuzzleRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import scala.concurrent.Await
 import scala.concurrent.duration._
@@ -13,8 +14,9 @@ object TrainingRoutes extends BaseRoutes {
   def training(request: cask.Request) = {
     withAuth(request, "training") { email =>
       val settings = Await.result(SettingsRepository.getAppSettings(Some(email)), 10.seconds)
+      val pageLang = getLang(request)
       cask.Response(
-        renderTrainingPage(Some(email), settings).render,
+        renderTrainingPage(Some(email), settings, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -138,7 +140,7 @@ object TrainingRoutes extends BaseRoutes {
     }
   }
 
-  def renderTrainingPage(userEmail: Option[String], settings: AppSettings) = {
+  def renderTrainingPage(userEmail: Option[String], settings: AppSettings, pageLang: String = I18n.defaultLang) = {
     html(lang := "en", cls := "dark", style := "--zoom:90;")(
       head(
         meta(charset := "utf-8"),
@@ -175,7 +177,7 @@ object TrainingRoutes extends BaseRoutes {
         )
       ),
       body(cls := "wood coords-out playing online")(
-        Components.renderHeader(userEmail, settings, appVersion),
+        Components.renderHeader(userEmail, settings, appVersion, pageLang),
         div(id := "main-wrap")(
           // Stats bar
           div(cls := "container-fluid mb-2 training-stats", style := "max-width: 900px;")(

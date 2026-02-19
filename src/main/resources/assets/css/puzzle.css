@@ -1371,6 +1371,43 @@ body[data-notation="2"] .pv_box .pv span {
     align-self: start;
 }
 
+.puzzle__board-header {
+    padding: 6px 12px;
+    background: var(--c-bg-box, #2a2520);
+    border-radius: 5px 5px 0 0;
+}
+
+.rp-main-col {
+    grid-area: main;
+    display: flex;
+    flex-direction: column;
+    --brd-hdr-h: 44px;
+}
+
+.puzzle__board-header__title {
+    font-size: 1em;
+    font-weight: 600;
+    margin: 0 0 2px 0;
+    color: #f0ece8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.puzzle__board-header__source {
+    font-size: 0.82em;
+    color: #a8a29e;
+}
+
+.puzzle__board-header__source a {
+    color: #7ec8e3;
+    text-decoration: none;
+}
+
+.puzzle__board-header__source a:hover {
+    text-decoration: underline;
+}
+
 .analyse__tools {
   flex: 1 1 auto;
   display: flex;
@@ -1446,6 +1483,44 @@ body[data-notation="2"] .pv_box .pv span {
     z-index: 10;
 }
 
+/* Mobile-friendly controls inside comment card */
+.puzzle__comment .puzzle__controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    width: 100%;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    overflow-x: visible;
+}
+
+.puzzle__comment .puzzle__controls .analyse__tools {
+    width: 100%;
+    display: flex;
+    justify-content: center;
+}
+
+.puzzle__comment .puzzle__controls .analyse__tools__menu {
+    display: flex;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 0.375rem;
+    width: 100%;
+}
+
+.puzzle__comment .puzzle__controls .btn {
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0.375rem 0.5rem;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
 .puzzle__controls .input-group {
     display: flex;
     align-items: center;
@@ -1497,6 +1572,14 @@ body[data-notation="2"] .pv_box .pv span {
         grid-template-rows: auto auto 1fr fit-content(0)
     }
 
+    /* Reduce board column width so board is brd-hdr-h shorter, fitting the viewport exactly */
+    .rp-main-col .puzzle {
+        --col2-uniboard-main-size: min(
+            calc(100vw * var(--board-scale) - 4vmin - 200px - 2 * var(--main-margin, 0px) - 0.8rem),
+            calc((100vh * var(--board-scale) - calc(var(--site-header-height) + var(--site-header-margin)) - 3rem - var(--brd-hdr-h)) / 12 * 11 / 9 * 11 + 4vmin)
+        )
+    }
+
     .puzzle__moves {
         display: block
     }
@@ -1507,6 +1590,13 @@ body[data-notation="2"] .pv_box .pv span {
         grid-template-areas:"side . board   gauge comment" "side . board   gauge controls" "side . board   gauge tools" "side . session .     tools" "side . kb-move .     ." "side . .       .     .";
         grid-template-columns: minmax(200px,320px) 2vmin var(--col3-uniboard-main-size) 2vmin minmax(200px,320px);
         grid-template-rows: auto auto 1fr fit-content(0)
+    }
+
+    .rp-main-col .puzzle {
+        --col3-uniboard-main-size: min(
+            calc(100vw * var(--board-scale) - 200px - 4vmin - 200px - 2 * var(--main-margin, 0px) - 0.8rem),
+            calc((100vh * var(--board-scale) - calc(var(--site-header-height) + var(--site-header-margin)) - 3rem - var(--brd-hdr-h)) / 12 * 11 / 9 * 11 + 4vmin)
+        )
     }
 }
 
@@ -2183,4 +2273,82 @@ body.playing.zen .puzzle__moves.areplay {
 .move-comment-inline .bi-pencil {
     opacity: 0.5;
     transition: opacity 0.15s;
+}
+
+/* Override Bootstrap list-group light-mode colors in dark candidate list */
+#candidate-list .list-group-item {
+    color: #ccc;
+}
+#candidate-list .list-group-item.active {
+    color: #fff;
+}
+
+/* Source attribution links in puzzle comment */
+.puzzle__comment__source a:hover {
+    text-decoration: underline;
+}
+
+/* ── puzzle__side__box visual card ─────────────────────────────────────── */
+.puzzle__side__box {
+    background: var(--c-bg-box);
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+}
+
+.puzzle__feedback {
+    padding: 1.1rem 1.25rem;
+}
+
+/* Main prompt text */
+.puzzle__feedback .content {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--c-font-clear);
+    margin-bottom: 0.6rem;
+    line-height: 1.4;
+}
+
+/* All action buttons in the side box — full size, touch-friendly */
+.puzzle__feedback .btn {
+    min-height: 42px;
+    font-size: 0.95rem;
+    border-radius: 7px;
+}
+.puzzle__feedback .btn-group .btn {
+    min-height: 42px;
+    font-size: 1rem;
+}
+
+/* Controls area action buttons (Random / Game / Position / Reload) */
+.puzzle__controls .btn:not(.prev-puzzle):not(.next-puzzle) {
+    min-height: 40px;
+    font-size: 0.9rem;
+}
+
+/* Star rating */
+.puzzle__feedback #star-rating .star-btn {
+    font-size: 1.75rem !important;
+}
+
+/* Mobile: larger touch targets */
+@media (max-width: 979.29px) {
+    .puzzle__feedback .btn {
+        min-height: 48px;
+        font-size: 1rem;
+    }
+    .puzzle__feedback .btn-group .btn {
+        min-height: 48px;
+        font-size: 1.05rem;
+    }
+    .puzzle__controls .btn:not(.prev-puzzle):not(.next-puzzle) {
+        min-height: 44px;
+        font-size: 0.95rem;
+    }
+    .puzzle__feedback #star-rating .star-btn {
+        font-size: 2rem !important;
+    }
+    .puzzle__feedback .content {
+        font-size: 1.1rem;
+    }
 }

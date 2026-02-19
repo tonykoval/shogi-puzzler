@@ -4,7 +4,8 @@ $(document).on('click', '.graph-btn', function() {
   const hash = $(this).data('hash');
   const senteName = $(this).data('sente');
   const goteName = $(this).data('gote');
-  $('#graphTitle').text('Analysis: ' + senteName + ' vs ' + goteName);
+  const i18n = window.i18n || {};
+  $('#graphTitle').text((i18n['maintenance.graphTitle'] || 'Analysis') + ': ' + senteName + ' ' + (i18n['common.vs'] || 'vs') + ' ' + goteName);
   
   $.get('/maintenance-analysis-data?hash=' + hash, function(data) {
     if (typeof data === 'string') {
@@ -35,7 +36,7 @@ $(document).on('click', '.graph-btn', function() {
       type: 'line',
       data: {
         datasets: [{
-          label: 'Score',
+          label: i18n['chart.scoreLabel'] || 'Score',
           data: scorePoints,
           borderColor: 'rgb(75, 192, 192)',
           backgroundColor: 'rgba(75, 192, 192, 0.2)',
@@ -44,7 +45,7 @@ $(document).on('click', '.graph-btn', function() {
           pointRadius: 3,
           pointHitRadius: 10
         }, {
-          label: 'Puzzles',
+          label: i18n['chart.puzzlesLabel'] || 'Puzzles',
           data: puzzlePoints,
           borderColor: 'rgb(255, 99, 132)',
           backgroundColor: 'rgb(255, 99, 132)',
@@ -65,7 +66,7 @@ $(document).on('click', '.graph-btn', function() {
             type: 'linear',
             title: {
               display: true,
-              text: 'Move'
+              text: i18n['chart.move'] || 'Move'
             },
             ticks: {
               stepSize: 1,
@@ -75,7 +76,7 @@ $(document).on('click', '.graph-btn', function() {
           y: {
             title: {
               display: true,
-              text: '▲ ' + senteName + ' vs ▽ ' + goteName,
+              text: '▲ ' + senteName + ' ' + (i18n['common.vs'] || 'vs') + ' ▽ ' + goteName,
               font: {
                 size: 16,
                 weight: 'bold'
@@ -86,9 +87,10 @@ $(document).on('click', '.graph-btn', function() {
             ticks: {
               stepSize: 0.1,
               callback: function(value) {
+                const i18n = window.i18n || {};
                 if (Math.abs(value) < 0.01) return '0';
-                if (value > 0.99) return '▲ Mate';
-                if (value < -0.99) return '▽ Mate';
+                if (value > 0.99) return '▲ ' + (i18n['chart.mateIn'] || 'Mate');
+                if (value < -0.99) return '▽ ' + (i18n['chart.mateIn'] || 'Mate');
                 const s = 1000 * value / (1 - Math.abs(value));
                 const absS = Math.abs(s);
                 const prefix = s > 0 ? '▲' : '▽';
@@ -109,28 +111,31 @@ $(document).on('click', '.graph-btn', function() {
           tooltip: {
             callbacks: {
               title: function(tooltipItems) {
+                const i18n = window.i18n || {};
                 const x = tooltipItems[0].raw.x;
-                return x === 0 ? 'Start' : 'Move ' + x;
+                return x === 0 ? (i18n['chart.start'] || 'Start') : (i18n['chart.move'] || 'Move') + ' ' + x;
               },
               label: function(context) {
+                const i18n = window.i18n || {};
                 const dataIndex = context.raw.x;
                 const s = data.scores[dataIndex];
                 if (s === undefined) return '';
                 
                 let scoreStr = '';
+                const mateIn = i18n['chart.mateIn'] || 'Mate in';
                 if (Math.abs(s) > 15000) {
                   const moves = 30000 - Math.abs(s);
-                  scoreStr = (s > 0 ? '▲ Mate in ' : '▽ Mate in ') + moves;
+                  scoreStr = (s > 0 ? '▲ ' + mateIn + ' ' : '▽ ' + mateIn + ' ') + moves;
                 } else {
                   scoreStr = (s > 0 ? '▲' : '▽') + Math.abs(s);
                 }
 
                 if (context.datasetIndex === 0) {
                    const hasPuzzle = data.puzzles.some(p => p.ply === dataIndex);
-                   return 'Score: ' + scoreStr + (hasPuzzle ? ' (Puzzle!)' : '');
+                   return (i18n['chart.score'] || 'Score') + ': ' + scoreStr + (hasPuzzle ? ' ' + (i18n['chart.puzzleIndicator'] || '(Puzzle!)') : '');
                 } else {
                    const p = data.puzzles.find(pz => pz.ply === dataIndex);
-                   let res = ['Puzzle here!', 'Score: ' + scoreStr];
+                   let res = [(i18n['chart.puzzleHere'] || 'Puzzle here!'), (i18n['chart.score'] || 'Score') + ': ' + scoreStr];
                    if (p && p.comment) {
                       res.push('---');
                       res = res.concat(p.comment.split('\n'));
@@ -153,9 +158,10 @@ $(document).on('click', '.delete-analysis-btn', function() {
   const hash = $(this).data('hash');
   const player = $(this).data('player');
   const $btn = $(this);
+  const i18n = window.i18n || {};
 
   function doDelete() {
-    $btn.prop('disabled', true).text('Deleting...');
+    $btn.prop('disabled', true).text(i18n['status.deleting'] || 'Deleting...');
     $.ajax({
       url: '/maintenance-delete-analysis',
       type: 'POST',
@@ -179,8 +185,8 @@ $(document).on('click', '.delete-analysis-btn', function() {
         if (dojo81Name && dojo81Name !== 'dojo81_user') window.maintenance.doFetch('dojo81', dojo81Name, false);
       },
       error: function(xhr) {
-        alert('Error deleting analysis: ' + xhr.statusText);
-        $btn.prop('disabled', false).text('Delete Analysis');
+        alert((i18n['status.errorDeleting'] || 'Error deleting analysis:') + ' ' + xhr.statusText);
+        $btn.prop('disabled', false).text(i18n['status.deleteAnalysis'] || 'Delete Analysis');
       }
     });
   }
@@ -193,18 +199,22 @@ $(document).on('click', '.delete-analysis-btn', function() {
       }
       if (stats && stats.total > 0) {
         const parts = [];
-        if (stats.accepted > 0) parts.push(stats.accepted + ' accepted');
-        if (stats.review > 0) parts.push(stats.review + ' in review');
-        if (stats.regular > 0) parts.push(stats.regular + ' regular');
-        const msg = 'This will delete ALL ' + stats.total + ' puzzle(s) (' + parts.join(', ') + ') and analysis data. Are you sure?';
+        if (stats.accepted > 0) parts.push(stats.accepted + ' ' + (i18n['maintenance.accepted'] || 'accepted'));
+        if (stats.review > 0) parts.push(stats.review + ' ' + (i18n['maintenance.inReview'] || 'in review'));
+        if (stats.regular > 0) parts.push(stats.regular + ' ' + (i18n['maintenance.regular'] || 'regular'));
+        const msg = (i18n['status.confirmDeletePuzzles'] || 'This will delete ALL {total} puzzle(s) ({accepted} accepted, {review} in review, {regular} regular) and analysis data. Are you sure?')
+          .replace('{total}', stats.total)
+          .replace('{accepted}', stats.accepted)
+          .replace('{review}', stats.review)
+          .replace('{regular}', stats.regular);
         if (!confirm(msg)) return;
       } else {
-        if (!confirm('Are you sure you want to delete analysis results?')) return;
+        if (!confirm(i18n['status.confirmDeleteAnalysis'] || 'Are you sure you want to delete analysis results?')) return;
       }
       doDelete();
     })
     .fail(function() {
-      if (!confirm('Are you sure you want to delete analysis results?')) return;
+      if (!confirm(i18n['status.confirmDeleteAnalysis'] || 'Are you sure you want to delete analysis results?')) return;
       doDelete();
     });
 });
@@ -309,8 +319,9 @@ window.maintenance = {
 
   doFetch: function(source, name, force = false) {
     console.log('doFetch called for', source, name, 'force:', force);
+    const i18n = window.i18n || {};
     if (!name || name.trim() === '') {
-      alert('Please enter a nickname for ' + source);
+      alert((i18n['status.pleaseEnterNickname'] || 'Please enter a nickname for {source}').replace('{source}', source));
       return;
     }
     const isLishogi = source === 'lishogi';
@@ -368,7 +379,7 @@ window.maintenance = {
       return;
     }
     
-    $results.html('<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div> <span class="status-message">Fetching games for ' + name + '...</span></div>');
+    $results.html('<div class="d-flex align-items-center"><div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div> <span class="status-message">' + (i18n['status.fetchingGames'] || 'Fetching games for {name}...').replace('{name}', name) + '</span></div>');
     
     $.get('/maintenance-fetch?player=' + encodeURIComponent(name) + '&source=' + source + '&force=' + force + '&limit=' + maxGames)
       .done(function(data) {
@@ -484,7 +495,7 @@ $(document).on('click', '#storeBtn', function() {
   if (games.length === 0) return;
   
   const $btn = $(this);
-  $btn.prop('disabled', true).text('Storing...');
+  $btn.prop('disabled', true).text((window.i18n && window.i18n['status.storing']) || 'Storing...');
   
   $.ajax({
     url: '/maintenance-store',
@@ -513,7 +524,7 @@ $(document).on('click', '#storeBtn', function() {
     },
     error: function(xhr) {
       alert('Error storing games: ' + xhr.statusText);
-      $btn.prop('disabled', false).text('Download Selected to DB');
+      $btn.prop('disabled', false).text((window.i18n && window.i18n['maintenance.downloadSelected']) || 'Download Selected to DB');
     }
   });
 });
@@ -532,7 +543,7 @@ $(document).on('click', '.analyze-btn', function() {
   
   const $btn = $(this);
   $btn.addClass('btn-task-' + kifHash);
-  $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> <span class="btn-text">Analyzing...</span>');
+  $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> <span class="btn-text">' + ((window.i18n && window.i18n['common.analyze']) || 'Analyzing...') + '</span>');
   
   console.log('Sending analysis request for', player, 'from', source, 'kifHash:', kifHash);
   
@@ -599,7 +610,7 @@ $(document).on('click', '.analyze-btn', function() {
         },
         function(error) { // error
           alert('Error analyzing game: ' + error);
-          $btn.prop('disabled', false).text('Analyze');
+          $btn.prop('disabled', false).text((window.i18n && window.i18n['common.analyze']) || 'Analyze');
         },
         function(message) { // progress
           const $btns = $('.btn-task-' + kifHash);

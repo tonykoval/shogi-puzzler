@@ -63,6 +63,8 @@ COPY model/ ./model/
 
 # Set environment variables
 ENV ENGINE_PATH=engine/yaneuraou_linux
+# ENV APP_GITHUB_URL=https://github.com/your-org/shogi-puzzler
+# ENV APP_CONTACT_EMAIL=your@email.com
 
 # Expose the port (Cask default is 8080)
 EXPOSE 8080

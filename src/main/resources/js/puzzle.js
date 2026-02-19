@@ -34,6 +34,7 @@ const games = $(".games")
 const urlParams = new URLSearchParams(window.location.search);
 const hash = urlParams.get('hash');
 const isAuthenticated = document.body.dataset.authenticated === "true";
+const userLang = document.body.dataset.lang || 'en';
 
 const apiUrl = hash ? "data?hash=" + hash : "data";
 const cacheKey = hash ? "puzzles_" + hash : (isAuthenticated ? "puzzles_all" : "puzzles_public");
@@ -71,21 +72,23 @@ function loadData(forceReload = false) {
             }
             initPuzzles(json);
             if (forceReload) {
+                const i18n = window.i18n || {};
                 Swal.fire({
                     icon: 'success',
-                    title: 'Data Reloaded',
-                    text: 'Puzzles have been updated from the database.',
+                    title: i18n['viewer.dataReloaded'] || 'Data Reloaded',
+                    text: i18n['viewer.puzzlesUpdated'] || 'Puzzles have been updated from the database.',
                     timer: 1500,
                     showConfirmButton: false
                 });
             }
         },
         error: function(xhr, status, error) {
+            const i18n = window.i18n || {};
             console.error("Error fetching data", error);
             Swal.fire({
                 icon: 'error',
-                title: 'Error',
-                text: 'Failed to fetch data from the server.'
+                title: i18n['viewer.errorTitle'] || 'Error',
+                text: i18n['viewer.fetchFailed'] || 'Failed to fetch data from the server.'
             });
         },
         complete: function() {
@@ -107,7 +110,7 @@ function initPuzzles(json) {
         if (json && json.error) {
             Swal.fire({
                 icon: 'error',
-                title: 'Access Denied',
+                title: (window.i18n && window.i18n['viewer.accessDenied']) || 'Access Denied',
                 text: json.error
             });
         }
@@ -242,8 +245,8 @@ $(".lishogi-game").click( function () {
         console.warn("No valid game URL found in selected.site:", selected.site);
         Swal.fire({
             icon: 'info',
-            title: 'Game Link Unavailable',
-            text: 'A direct link to this game is not available. You can try searching for it on ' + (selected.site || 'the original platform') + '.',
+            title: (window.i18n && window.i18n['viewer.gameLinkUnavailable']) || 'Game Link Unavailable',
+            text: (window.i18n && window.i18n['viewer.gameLinkUnavailableText']) || 'A direct link to this game is not available. You can try searching for it on Lishogi.',
             confirmButtonColor: '#3085d6'
         });
     }
@@ -271,16 +274,18 @@ $("#isPublicCheckbox").change(function() {
                     timer: 2000,
                     timerProgressBar: true
                 });
+                const i18n = window.i18n || {};
                 Toast.fire({
                     icon: 'success',
-                    title: isPublic ? 'Puzzle is now public' : 'Puzzle is now private'
+                    title: isPublic ? (i18n['viewer.puzzlePublic'] || 'Puzzle is now public') : (i18n['viewer.puzzlePrivate'] || 'Puzzle is now private')
                 });
             },
             error: function() {
+                const i18n = window.i18n || {};
                 Swal.fire({
                     icon: 'error',
-                    title: 'Error',
-                    text: 'Failed to update puzzle visibility.'
+                    title: i18n['viewer.errorTitle'] || 'Error',
+                    text: i18n['viewer.failedVisibility'] || 'Failed to update puzzle visibility.'
                 });
             }
         });
@@ -292,7 +297,8 @@ function clearShapes() {
         sg.setAutoShapes([]);
         areHintsVisible = false;
         isPieceHintVisible = false;
-        $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>Hint');
+        const i18n = window.i18n || {};
+        $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>' + (i18n['viewer.hint'] || 'Hint'));
     }
 }
 
@@ -613,13 +619,13 @@ $(document).on('click', '.engine-analysis-btn', function() {
 
     // Disable button and show loading
     const btn = $(this);
-    btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Analyzing...');
+    btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> ' + ((window.i18n && window.i18n['common.analyzing']) || 'Analyzing...'));
 
     runEngineAnalysis(sfen, playerColor, resultContainer);
 
     // Re-enable button after a timeout (will be re-enabled when modal closes anyway)
     setTimeout(() => {
-        btn.prop('disabled', false).html('<i class="bi bi-cpu me-1"></i>Engine Analysis');
+        btn.prop('disabled', false).html('<i class="bi bi-cpu me-1"></i>' + ((window.i18n && window.i18n['puzzle.engineAnalysis']) || 'Engine Analysis'));
     }, 5000);
 });
 
@@ -674,7 +680,8 @@ function selectSituation(id, data) {
     id = parseInt(id);
     games.val(id)
     games.trigger('change.select2');
-    $('.content').html('<b>Play the correct move!</b>');
+    $('.content').html('<b>' + ((window.i18n && window.i18n['viewer.playCorrectMove']) || 'Play the correct move!') + '</b>');
+    $('.translate-puzzle-btn').remove();
     $('#play-continuation').hide();
     $('#continuation-options').hide().empty();
     $('#continuation-controls').hide();
@@ -694,7 +701,7 @@ function selectSituation(id, data) {
     
     // Update puzzle info panel
     if (selected) {
-        $('#turn-text').text(selected.player === "sente" ? "Sente to play" : "Gote to play");
+        $('#turn-text').text(selected.player === "sente" ? (window.i18n && window.i18n['puzzle.senteToMove'] ? window.i18n['puzzle.senteToMove'] : 'Sente to play') : (window.i18n && window.i18n['puzzle.goteToMove'] ? window.i18n['puzzle.goteToMove'] : 'Gote to play'));
         
         // Disable "Game" button if no valid URL and no valid hash
         const gameHash = selected.id ? selected.id.split('#')[0] : null;
@@ -707,8 +714,13 @@ function selectSituation(id, data) {
             $(".lishogi-game").removeClass('disabled').attr('title', 'View on Lishogi');
         }
 
+        // Apply i18n comment if a translation exists for the user's language
+    if (userLang !== 'en' && selected.comments_i18n && selected.comments_i18n[userLang]) {
+            selected.comment = selected.comments_i18n[userLang];
+        }
+
         // Hide comment until move is played
-        $('.content').html('<b>Play the correct move!</b>');
+        $('.content').html('<b>' + ((window.i18n && window.i18n['viewer.playCorrectMove']) || 'Play the correct move!') + '</b>');
 
         // Basic material count if hands are available
         if (selected.hands) {
@@ -882,7 +894,8 @@ function buildEvalBar(pos, highlightMove, engineScore) {
         const s = extractScore(score);
         if (!s) return;
         const isYou = highlightMove === id;
-        items.push({ label: isYou ? label + ' (You)' : label, ...s, color, isYou, pct: cpToPercent(s.cp) });
+        const youLabel = (window.i18n && window.i18n['puzzle.you']) || 'You';
+        items.push({ label: isYou ? label + ' (' + youLabel + ')' : label, ...s, color, isYou, pct: cpToPercent(s.cp) });
     }
 
     add(pos.best_move, pos.best, '1st', '#28a745', 1);
@@ -917,7 +930,7 @@ function buildEvalBar(pos, highlightMove, engineScore) {
             ? { moves: engineScore.value }
             : { cp: engineScore.value });
         if (s) {
-            items.push({ label: 'Engine', ...s, color: '#fff', isYou: false, isEngine: true, pct: cpToPercent(s.cp) });
+            items.push({ label: (window.i18n && window.i18n['puzzle.engineLabel']) || 'Engine', ...s, color: '#fff', isYou: false, isEngine: true, pct: cpToPercent(s.cp) });
         }
     }
 
@@ -933,7 +946,9 @@ function buildEvalBar(pos, highlightMove, engineScore) {
         const zIdx = isEngine ? 12 : m.isYou ? 10 : 5;
         const winPct = cpToWinPercent(m.cp);
         const losePct = 100 - winPct;
-        return `<div style="position:absolute;left:${m.pct}%;top:50%;transform:translate(-50%,-50%);z-index:${zIdx};" title="${m.label}: ${m.text} — You ${winPct}% / Opp ${losePct}%">
+        const youStr = (window.i18n && window.i18n['puzzle.you']) || 'You';
+        const oppStr = (window.i18n && window.i18n['puzzle.opponent']) || 'Opp';
+        return `<div style="position:absolute;left:${m.pct}%;top:50%;transform:translate(-50%,-50%);z-index:${zIdx};" title="${m.label}: ${m.text} — ${youStr} ${winPct}% / ${oppStr} ${losePct}%">
             <div style="width:${size}px;height:${size}px;border-radius:50%;background:${m.color};border:${border};box-shadow:0 1px 3px rgba(0,0,0,0.5);"></div>
         </div>`;
     }).join('');
@@ -952,11 +967,11 @@ function buildEvalBar(pos, highlightMove, engineScore) {
             `● ${m.label}: ${m.text}` +
             `<span class="eval-win-tooltip" style="position:absolute;bottom:calc(100% + 6px);left:50%;transform:translateX(-50%);background:#1a1a2e;color:#eee;padding:6px 10px;border-radius:6px;font-size:0.85em;white-space:nowrap;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,0.6);display:none;">` +
                 `<span style="display:flex;align-items:center;gap:6px;">` +
-                    `<span style="color:${winColor};font-weight:bold;">You ${winPct}%</span>` +
+                    `<span style="color:${winColor};font-weight:bold;">${(window.i18n && window.i18n['puzzle.you']) || 'You'} ${winPct}%</span>` +
                     `<span style="display:inline-block;width:60px;height:8px;background:${loseColor};border-radius:4px;overflow:hidden;">` +
                         `<span style="display:block;width:${winPct}%;height:100%;background:${winColor};"></span>` +
                     `</span>` +
-                    `<span style="color:${loseColor};font-weight:bold;">Opp ${losePct}%</span>` +
+                    `<span style="color:${loseColor};font-weight:bold;">${(window.i18n && window.i18n['puzzle.opponent']) || 'Opp'} ${losePct}%</span>` +
                 `</span>` +
                 `<span style="position:absolute;top:100%;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top-color:#1a1a2e;"></span>` +
             `</span>` +
@@ -972,7 +987,7 @@ function buildEvalBar(pos, highlightMove, engineScore) {
             ${markers}
         </div>
         <div style="display:flex;justify-content:space-between;font-size:0.6em;color:#999;margin-top:2px;padding:0 4px;">
-            <span>Losing</span><span>0</span><span>Winning</span>
+            <span>${(window.i18n && window.i18n['puzzle.evalLosing']) || 'Losing'}</span><span>0</span><span>${(window.i18n && window.i18n['puzzle.evalWinning']) || 'Winning'}</span>
         </div>
         <div style="margin-top:4px;text-align:center;font-size:0.8em;line-height:1.8;overflow:visible;">${legend}</div>
     </div>`;
@@ -984,13 +999,13 @@ function fireError(pos) {
     const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'error',
-        title: 'Failure',
+        title: (window.i18n && window.i18n['common.failure']) || 'Failure',
         width: 600,
-        html: '<p>You played the bad move!</p>' +
+        html: '<p>' + ((window.i18n && window.i18n['puzzle.youPlayedBadMove']) || 'You played the bad move!') + '</p>' +
             buildEvalBar(pos, 0) +
             '<div>' + formatComment(pos.comment) + '</div>' +
             getEngineAnalysisButton(pos.sfen, pos.player),
-        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">' + ((window.i18n && window.i18n['puzzle.lishogiPosition']) || 'Lishogi position') + '</a>'
     })
 }
 
@@ -1000,13 +1015,13 @@ function fireWarning(pos) {
     const lishogiSfen = pos.sfen.replace(/ /g, '_');
     Swal.fire({
         icon: 'warning',
-        title: 'Warning',
+        title: (window.i18n && window.i18n['common.warning']) || 'Warning',
         width: 600,
-        html: '<p>You didn\'t play one of the best 3 moves! Use Engine Analysis to check your move.</p>' +
+        html: '<p>' + ((window.i18n && window.i18n['puzzle.notBest3Moves']) || "You didn't play one of the best 3 moves! Use Engine Analysis to check your move.") + '</p>' +
             buildEvalBar(pos, null) +
             '<div>' + formatComment(pos.comment) + '</div>' +
             getEngineAnalysisButton(pos.sfen, pos.player),
-        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">' + ((window.i18n && window.i18n['puzzle.lishogiPosition']) || 'Lishogi position') + '</a>'
     })
 }
 
@@ -1017,24 +1032,24 @@ function fireSuccess(pos, num) {
     let msg;
     switch (num) {
         case 1:
-            msg = "You found <b>the best</b> engine move!"
+            msg = (window.i18n && window.i18n['puzzle.youFoundBest']) || "You found <b>the best</b> engine move!"
             break
         case 2:
-            msg = "You found <b>the second</b> engine move! Check the best."
+            msg = (window.i18n && window.i18n['puzzle.youFoundSecond']) || "You found <b>the second</b> engine move! Check the best."
             break
         case 3:
-            msg = "You found <b>the third</b> engine move! Check the best."
+            msg = (window.i18n && window.i18n['puzzle.youFoundThird']) || "You found <b>the third</b> engine move! Check the best."
             break
     }
     Swal.fire({
         icon: 'success',
-        title: 'Success',
+        title: (window.i18n && window.i18n['common.success']) || 'Success',
         width: 600,
         html: '<p>' + msg + '</p>' +
             buildEvalBar(pos, num) +
             '<div>' + formatComment(pos.comment) + '</div>' +
             getEngineAnalysisButton(pos.sfen, pos.player),
-        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">Lishogi position</a>'
+        footer: '<a href="https://lishogi.org/analysis/"' + lishogiSfen + '" target="_blank">' + ((window.i18n && window.i18n['puzzle.lishogiPosition']) || 'Lishogi position') + '</a>'
     })
 }
 
@@ -1089,7 +1104,7 @@ function getEngineAnalysisButton(sfen, playerColor) {
                     </div>
                 </div>
                 <button class="btn btn-sm btn-warning w-100 mt-2 engine-analysis-btn" data-sfen="${currentSfen}" data-player="${playerColor}">
-                    <i class="bi bi-cpu me-1"></i>Engine Analysis
+                    <i class="bi bi-cpu me-1"></i>" + ((window.i18n && window.i18n['puzzle.engineAnalysis']) || 'Engine Analysis') + "
                 </button>
                             </div>
         </div>
@@ -1285,13 +1300,13 @@ function runEngineAnalysis(sfen, playerColor, resultContainer) {
                 if (pvMoves.length > 0) {
                     pvHtml = `<div class="mt-1"><small class="text-muted">PV: ${pvMoves.join(' ')}</small></div>`;
                     pvHtml += `<button class="btn btn-sm btn-outline-success w-100 mt-2 play-pv-btn" data-pv="${pvString}" data-sfen="${sfen}">
-                        <i class="bi bi-play-fill me-1"></i>Play on Board (${pvMoves.length} moves)
+                        <i class="bi bi-play-fill me-1"></i>` + ((window.i18n && window.i18n['puzzle.playOnBoard']) || 'Play on Board') + ` (${pvMoves.length} ` + ((window.i18n && window.i18n['puzzle.move']) || 'Move') + `)
                     </button>`;
                 }
 
                 resultContainer.innerHTML = `
                     <div class="alert alert-light border mb-0">
-                        <strong><i class="bi bi-cpu me-1"></i>Engine:</strong>
+                        <strong><i class="bi bi-cpu me-1"></i>" + ((window.i18n && window.i18n['puzzle.engine']) || 'Engine:') + "</strong>
                         <span class="${scoreClass}" style="font-size: 1.1em; font-weight: bold;">${scoreText}</span>
                         <small class="text-muted ms-2">(${resultDepth} plies, ${timeUsed}s)</small>
                         ${pvHtml}
@@ -1332,9 +1347,9 @@ function updateStarDisplay(rating) {
         }
     });
     if (rating > 0) {
-        $('#rating-label').text('Your rating: ' + rating + '/5');
+        $('#rating-label').text(rating + '/5');
     } else {
-        $('#rating-label').text(isAuthenticated ? 'Rate this puzzle' : 'Login to rate');
+        $('#rating-label').text(isAuthenticated ? ((window.i18n && window.i18n['viewer.ratePuzzle']) || 'Rate this puzzle') : ((window.i18n && window.i18n['viewer.loginToRate']) || 'Login to rate'));
     }
 }
 
@@ -1358,7 +1373,7 @@ $('#star-rating').on('mouseenter', '.star-btn', function() {
 $('#star-rating').on('click', '.star-btn', function() {
     if (!isAuthenticated) {
         const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
-        Toast.fire({ icon: 'info', title: 'Login required to rate puzzles' });
+        Toast.fire({ icon: 'info', title: (window.i18n && window.i18n['puzzle.loginToRate']) || 'Login required to rate puzzles' });
         return;
     }
     if (!selected || !selected._id || !selected._id.$oid) return;
@@ -1400,7 +1415,7 @@ $('#star-rating').on('click', '.star-btn', function() {
         },
         error: function() {
             const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
-            Toast.fire({ icon: 'error', title: 'Failed to save rating' });
+            Toast.fire({ icon: 'error', title: (window.i18n && window.i18n['puzzle.rateFailed']) || 'Failed to save rating' });
         }
     });
 });
@@ -1453,7 +1468,7 @@ function showPieceHint(pos) {
     if (shape) {
         sg.setAutoShapes([shape]);
         isPieceHintVisible = true;
-        $("#show-hint").html('<i class="bi bi-x-circle-fill me-1"></i>Hide Hint');
+        $("#show-hint").html('<i class="bi bi-x-circle-fill me-1"></i>' + ((window.i18n && window.i18n['viewer.hideHint']) || 'Hide Hint'));
     }
 }
 
@@ -1463,7 +1478,7 @@ function clearPieceHint() {
         sg.setAutoShapes([]);
     }
     isPieceHintVisible = false;
-    $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>Hint');
+    $("#show-hint").html('<i class="bi bi-question-circle-fill me-1"></i>' + ((window.i18n && window.i18n['viewer.hint']) || 'Hint'));
 }
 
 function incrementPlayCount() {
@@ -1488,6 +1503,22 @@ function resolveMove(pos, r0, r1, r2, r3) {
     $(".content").html(formatComment(pos.comment))
     $("#show-hints").show();
     $("#show-hint").hide();
+
+    // Show translate button if user is authenticated and there is a comment
+    if (isAuthenticated && pos.comment && pos._id && pos._id.$oid) {
+        const hasSk = pos.hasTranslation && pos.hasTranslation.sk;
+        const btnLabel = hasSk ? '🌐 Edit Translation' : '🌐 Translate';
+        const $existing = $('.translate-puzzle-btn');
+        if ($existing.length === 0) {
+            const $btn = $('<button class="btn btn-sm btn-outline-secondary translate-puzzle-btn w-100 mt-1">' + btnLabel + '</button>');
+            $btn.click(() => openTranslateModal(pos));
+            $('.content').after($btn);
+        } else {
+            $existing.text(btnLabel).off('click').click(() => openTranslateModal(pos));
+        }
+    } else {
+        $('.translate-puzzle-btn').remove();
+    }
     
     // Add continuation buttons for top 3 moves
     let continuationHtml = "";
@@ -1669,6 +1700,84 @@ function checkTrainingDeck(puzzleOid) {
     });
 }
 
+// ===== Puzzle Translation =====
+
+function openTranslateModal(pos) {
+    if (!pos || !pos._id || !pos._id.$oid) return;
+    const puzzleId = pos._id.$oid;
+    const enComment = pos.comment || '';
+    const skComment = (pos.comments_i18n && pos.comments_i18n.sk) ? pos.comments_i18n.sk : '';
+
+    Swal.fire({
+        title: '🌐 Translate Puzzle Comment',
+        width: 640,
+        html: `
+            <div class="text-start">
+                <label class="form-label fw-bold mb-1">Original (EN):</label>
+                <div class="border rounded p-2 mb-3 text-muted" style="white-space:pre-wrap;font-size:0.9em;max-height:120px;overflow-y:auto;">${enComment || '<em>No comment</em>'}</div>
+                <label class="form-label fw-bold mb-1">Translation (SK):</label>
+                <textarea id="swal-sk-comment" class="form-control mb-2" rows="4" placeholder="Slovak translation...">${skComment}</textarea>
+                <button id="swal-auto-translate" class="btn btn-sm btn-outline-info w-100">Auto-translate (MyMemory)</button>
+            </div>`,
+        showCancelButton: true,
+        confirmButtonText: 'Save',
+        cancelButtonText: 'Cancel',
+        didOpen: () => {
+            document.getElementById('swal-auto-translate').addEventListener('click', function() {
+                const btn = this;
+                btn.disabled = true;
+                btn.textContent = 'Translating...';
+                $.ajax({
+                    url: '/api/translate',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({ text: enComment, from: 'en', to: 'sk' }),
+                    success: function(resp) {
+                        if (resp.translated) {
+                            document.getElementById('swal-sk-comment').value = resp.translated;
+                        }
+                    },
+                    error: function() {
+                        Swal.showValidationMessage('Auto-translate failed. Please try again.');
+                    },
+                    complete: function() {
+                        btn.disabled = false;
+                        btn.textContent = 'Auto-translate (MyMemory)';
+                    }
+                });
+            });
+        },
+        preConfirm: () => {
+            return document.getElementById('swal-sk-comment').value;
+        }
+    }).then(result => {
+        if (result.isConfirmed) {
+            const skText = result.value || '';
+            $.ajax({
+                url: '/puzzle-creator/translate',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ id: puzzleId, lang: 'sk', comment: skText, moveComments: {} }),
+                success: function() {
+                    // Update local data
+                    if (!pos.comments_i18n) pos.comments_i18n = {};
+                    pos.comments_i18n.sk = skText;
+                    if (!pos.hasTranslation) pos.hasTranslation = {};
+                    pos.hasTranslation.sk = skText.length > 0;
+                    // Update cache
+                    localStorage.setItem(cacheKey, JSON.stringify(data));
+                    const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
+                    Toast.fire({ icon: 'success', title: 'Translation saved' });
+                },
+                error: function() {
+                    const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000, timerProgressBar: true });
+                    Toast.fire({ icon: 'error', title: 'Failed to save translation' });
+                }
+            });
+        }
+    });
+}
+
 $('#training-btn').click(function() {
     if (!selected || !selected._id || !selected._id.$oid) return;
     const puzzleOid = selected._id.$oid;
@@ -1686,9 +1795,9 @@ $('#training-btn').click(function() {
             data: JSON.stringify({ puzzle_object_id: puzzleOid }),
             success: function() {
                 btn.removeClass('btn-warning').addClass('btn-outline-warning');
-                btn.find('.training-btn-text').text('Add to Deck');
+                btn.find('.training-btn-text').text((window.i18n && window.i18n['viewer.addToDeck']) || 'Add to Deck');
                 const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, timerProgressBar: true });
-                Toast.fire({ icon: 'success', title: 'Removed from training deck' });
+                Toast.fire({ icon: 'success', title: (window.i18n && window.i18n['puzzle.removedFromDeck']) || 'Removed from training deck' });
             },
             complete: function() { btn.prop('disabled', false); }
         });
@@ -1700,14 +1809,14 @@ $('#training-btn').click(function() {
             data: JSON.stringify({ puzzle_object_id: puzzleOid, puzzle_source: source }),
             success: function() {
                 btn.removeClass('btn-outline-warning').addClass('btn-warning');
-                btn.find('.training-btn-text').text('Remove from Deck');
+                btn.find('.training-btn-text').text((window.i18n && window.i18n['viewer.removeFromDeck']) || 'Remove from Deck');
                 const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 1500, timerProgressBar: true });
-                Toast.fire({ icon: 'success', title: 'Added to training deck' });
+                Toast.fire({ icon: 'success', title: (window.i18n && window.i18n['puzzle.addedToDeck']) || 'Added to training deck' });
             },
             error: function(xhr) {
                 if (xhr.status === 409) {
                     btn.removeClass('btn-outline-warning').addClass('btn-warning');
-                    btn.find('.training-btn-text').text('Remove from Deck');
+                    btn.find('.training-btn-text').text((window.i18n && window.i18n['viewer.removeFromDeck']) || 'Remove from Deck');
                 }
             },
             complete: function() { btn.prop('disabled', false); }

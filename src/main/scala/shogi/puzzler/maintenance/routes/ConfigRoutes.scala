@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{SettingsRepository, AppSettings}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import shogi.puzzler.util.CryptoUtil
 import scala.concurrent.Await
@@ -24,6 +25,7 @@ object ConfigRoutes extends BaseRoutes {
     withAuth(request, "config") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
+      implicit val lang: String = getLang(request)
       cask.Response(
         renderConfigPage(userEmail, settings).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
@@ -31,27 +33,34 @@ object ConfigRoutes extends BaseRoutes {
     }
   }
 
-  def renderConfigPage(userEmail: Option[String], settings: AppSettings) = {
-    Components.layout("Configuration", userEmail, settings, appVersion)(
-      h1(cls := "mb-4")("Configuration"),
+  def renderConfigPage(userEmail: Option[String], settings: AppSettings)(implicit lang: String = I18n.defaultLang) = {
+    Components.layout(I18n.t("config.pageTitle"), userEmail, settings, appVersion, lang = lang)(
+      h1(cls := "mb-4")(I18n.t("config.pageTitle")),
       div(cls := "card bg-dark text-light border-secondary")(
         div(cls := "card-body")(
           form(action := "/config", method := "post")(
             div(cls := "row")(
               div(cls := "col-md-4")(
-                Components.configField("Lishogi Nickname", "lishogi_nickname", settings.lishogiNickname)
+                Components.configField(I18n.t("config.lishogiNick"), "lishogi_nickname", settings.lishogiNickname)
               ),
               div(cls := "col-md-4")(
-                Components.configField("ShogiWars Nickname", "shogiwars_nickname", settings.shogiwarsNickname)
+                Components.configField(I18n.t("config.shogiwarsNick"), "shogiwars_nickname", settings.shogiwarsNickname)
               ),
               div(cls := "col-md-4")(
-                Components.configField("81Dojo Nickname", "dojo81_nickname", settings.dojo81Nickname)
+                Components.configField(I18n.t("config.dojo81Nick"), "dojo81_nickname", settings.dojo81Nickname)
               )
             ),
             div(cls := "mb-3")(
-              label(cls := "form-label")("Engine"),
+              label(cls := "form-label")(I18n.t("config.language")),
+              select(name := "lang", cls := "form-select bg-dark text-light border-secondary")(
+                option(value := "en", if (lang == "en") selected := "selected" else "")(I18n.t("config.languageEn")),
+                option(value := "sk", if (lang == "sk") selected := "selected" else "")(I18n.t("config.languageSk"))
+              )
+            ),
+            div(cls := "mb-3")(
+              label(cls := "form-label")(I18n.t("config.engine")),
               select(name := "engine_path", cls := "form-select bg-dark text-light border-secondary")(
-                option(value := "", if (settings.enginePath.isEmpty) selected := "selected" else "")("Select an engine..."),
+                option(value := "", if (settings.enginePath.isEmpty) selected := "selected" else "")(I18n.t("config.selectEngine")),
                 listEngines().map { eng =>
                   option(value := eng, if (eng == settings.enginePath) selected := "selected" else "")(eng)
                 }
@@ -59,20 +68,20 @@ object ConfigRoutes extends BaseRoutes {
             ),
             div(cls := "row")(
               div(cls := "col-md-4 mb-3")(
-                Components.configField("Shallow Analysis Limit", "shallow_limit", settings.shallowLimit.toString, "number")
+                Components.configField(I18n.t("config.shallowLimit"), "shallow_limit", settings.shallowLimit.toString, "number")
               ),
               div(cls := "col-md-4 mb-3")(
-                Components.configField("Deep Analysis Limit", "deep_limit", settings.deepLimit.toString, "number")
+                Components.configField(I18n.t("config.deepLimit"), "deep_limit", settings.deepLimit.toString, "number")
               ),
               div(cls := "col-md-4 mb-3")(
-                Components.configField("Win Chance Drop Threshold", "win_chance_threshold", settings.winChanceDropThreshold.toString, "number", Some("any"))
+                Components.configField(I18n.t("config.winChanceThreshold"), "win_chance_threshold", settings.winChanceDropThreshold.toString, "number", Some("any"))
               )
             ),
-            button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")("Save Configuration"),
+            button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")(I18n.t("config.save")),
             if (settings.shogiwarsNickname == "Tonyko") {
               div(cls := "alert alert-warning mt-3")(
                 i(cls := "bi bi-exclamation-triangle-fill me-2"),
-                "Note: You are currently using default nicknames. Change them to see your own games."
+                I18n.t("config.defaultNicknameWarning")
               )
             } else ""
           )
@@ -90,6 +99,7 @@ object ConfigRoutes extends BaseRoutes {
       shallow_limit: Int,
       deep_limit: Int,
       win_chance_threshold: Double,
+      lang: String,
       request: cask.Request
   ) = {
     val userEmail = getSessionUserEmail(request)
@@ -97,8 +107,9 @@ object ConfigRoutes extends BaseRoutes {
       noCacheRedirect("/login")
     } else {
       val targetUser = userEmail.get
+      val validLang = I18n.validateLang(lang)
       logger.info(
-        s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold"
+        s"Saving config for $targetUser: $lishogi_nickname, $shogiwars_nickname, $dojo81_nickname, $engine_path, $shallow_limit, $deep_limit, $win_chance_threshold, lang=$validLang"
       )
 
       val currentSettings = Await.result(SettingsRepository.getAppSettings(userEmail), 5.seconds)
@@ -112,10 +123,17 @@ object ConfigRoutes extends BaseRoutes {
         winChanceDropThreshold = win_chance_threshold,
         isConfigured = true
       )
-      
+
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
-      
-      noCacheRedirect("/my-games")
+
+      cask.Response(
+        "",
+        statusCode = 302,
+        headers = Seq(
+          "Location" -> "/my-games",
+          "Set-Cookie" -> s"lang=$validLang; Path=/; SameSite=Strict"
+        ) ++ noCacheHeaders
+      )
     }
   }
 

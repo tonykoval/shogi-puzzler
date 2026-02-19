@@ -222,6 +222,44 @@ object RepertoireRepository {
     collection.find(and(equal("_id", new ObjectId(id)), equal("is_public", true))).headOption()
   }
 
+  def saveMovei18nComment(repertoireId: String, parentSfen: String, usi: String, lang: String, comment: String): Future[Unit] = {
+    val nodeKey = sanitizeNodeKey(parentSfen)
+    logger.debug(s"Saving i18n comment for move $usi in repertoire $repertoireId (nodeKey: $nodeKey, lang: $lang)")
+
+    getRepertoire(repertoireId).flatMap {
+      case Some(doc) =>
+        val nodes = if (doc.containsKey("nodes")) doc.get("nodes").getOrElse(new org.bson.BsonDocument()).asDocument() else new org.bson.BsonDocument()
+
+        if (nodes.containsKey(nodeKey)) {
+          val nodeData = nodes.get(nodeKey).asDocument()
+          val moves = nodeData.getArray("moves")
+
+          moves.asScala.find { m =>
+            m.isDocument && m.asDocument().getString("usi").getValue == usi
+          }.foreach { m =>
+            val moveDoc = m.asDocument()
+            val i18nDoc = if (moveDoc.containsKey("comment_i18n")) {
+              moveDoc.get("comment_i18n").asDocument()
+            } else {
+              val newDoc = new org.bson.BsonDocument()
+              moveDoc.put("comment_i18n", newDoc)
+              newDoc
+            }
+            i18nDoc.put(lang, new org.bson.BsonString(comment))
+          }
+
+          collection.updateOne(
+            equal("_id", new ObjectId(repertoireId)),
+            set(s"nodes.$nodeKey", nodeData)
+          ).toFuture().map(_ => ())
+        } else {
+          Future.failed(new Exception("Node not found"))
+        }
+      case None =>
+        Future.failed(new Exception("Repertoire not found"))
+    }
+  }
+
   def addMoves(repertoireId: String, parentSfen: String, moves: Seq[(String, String)]): Future[Unit] = {
     // moves: Seq[(usi, nextSfen)]
     if (moves.isEmpty) return Future.successful(())

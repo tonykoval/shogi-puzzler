@@ -114,10 +114,36 @@ function renderBoard(lastMoveUsi) {
             },
             orientation: 'sente',
             turnColor: pos.turn,
+            activeColor: pos.turn,
             lastDests: lastDests,
             lastPiece: lastPiece,
-            viewOnly: true,
+            viewOnly: false,
             disableContextMenu: true,
+            movable: {
+                free: false,
+                dests: Shogiops.compat.shogigroundMoveDests(pos),
+            },
+            droppable: {
+                free: false,
+                dests: Shogiops.compat.shogigroundDropDests(pos),
+            },
+            promotion: {
+                promotesTo: role => Shogiops.variantUtil.promote("standard")(role),
+                movePromotionDialog: (orig, dest) => {
+                    const piece = sg.state.pieces.get(orig);
+                    const capture = sg.state.pieces.get(dest);
+                    return Shogiops.variantUtil.pieceCanPromote("standard")(piece, Shogiops.parseSquare(orig), Shogiops.parseSquare(dest), capture)
+                        && !Shogiops.variantUtil.pieceForcePromote("standard")(piece, Shogiops.parseSquare(dest));
+                },
+                forceMovePromotion: (orig, dest) => {
+                    const piece = sg.state.pieces.get(orig);
+                    return Shogiops.variantUtil.pieceForcePromote("standard")(piece, Shogiops.parseSquare(dest));
+                },
+            },
+            events: {
+                move: (orig, dest, prom) => handleBoardMove({ orig, dest, prom }),
+                drop: (piece, key) => handleBoardMove({ role: piece.role, key }),
+            },
         });
         sg.attach({
             board: document.getElementById('dirty'),
@@ -140,10 +166,45 @@ function renderBoard(lastMoveUsi) {
             hands: hands
         },
         turnColor: pos.turn,
+        activeColor: pos.turn,
         lastDests: lastDests,
         lastPiece: lastPiece,
-        viewOnly: true
+        viewOnly: false,
+        movable: {
+            dests: Shogiops.compat.shogigroundMoveDests(pos),
+        },
+        droppable: {
+            dests: Shogiops.compat.shogigroundDropDests(pos),
+        },
     });
+}
+
+function handleBoardMove(moveData) {
+    const move = moveData.role ? {
+        role: moveData.role,
+        to: Shogiops.parseSquare(moveData.key)
+    } : {
+        from: Shogiops.parseSquare(moveData.orig),
+        to: Shogiops.parseSquare(moveData.dest),
+        promotion: moveData.prom
+    };
+    const usi = Shogiops.makeUsi(move);
+
+    const nodeKey = sanitizeSfen(currentSfen);
+    const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const matchingMove = node.moves.find(m => m.usi === usi);
+
+    if (matchingMove) {
+        lastMoveComment = matchingMove.comment || null;
+        history.push(currentSfen);
+        currentSfen = matchingMove.nextSfen;
+        renderBoard(usi);
+        renderVariations();
+        updateMenuState();
+        displayMoveArrows();
+    } else {
+        renderBoard();
+    }
 }
 
 function sanitizeSfen(sfen) {

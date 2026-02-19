@@ -8,6 +8,7 @@ import scalatags.Text.all._
 import scala.concurrent.duration._
 import scala.concurrent.Await
 import shogi.puzzler.db.{GameRepository, PuzzleRepository, SettingsRepository, AppSettings, TrainingRepository, OCRRepository, OCRHistoryEntry}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import shogi.puzzler.game.{GameLoader, KifAnnotator}
 import shogi.puzzler.analysis.{GameAnalyzer, PuzzleExtractor}
@@ -58,10 +59,11 @@ object MaintenanceRoutes extends BaseRoutes {
     withAuth(request, "ocr") { email =>
       val targetEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
+      val pageLang = getLang(request)
       val history = Await.result(OCRRepository.getOCRHistory(Some(email).getOrElse("global")), 10.seconds)
-      
+
       cask.Response(
-        renderOcrPage(Some(email), settings, history).render,
+        renderOcrPage(Some(email), settings, history, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -72,9 +74,10 @@ object MaintenanceRoutes extends BaseRoutes {
     withAuth(request, "ocr") { email =>
       val targetEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
-      
+      val pageLang = getLang(request)
+
       cask.Response(
-        renderOcrEditPage(Some(email), settings, None).render,
+        renderOcrEditPage(Some(email), settings, None, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -85,13 +88,14 @@ object MaintenanceRoutes extends BaseRoutes {
     withAuth(request, "ocr") { email =>
       val targetEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
+      val pageLang = getLang(request)
       val entry = Await.result(OCRRepository.getOCRById(id), 10.seconds)
-      
+
       if (entry.isEmpty || entry.get.userEmail != email) {
         noCacheRedirect("/ocr")
       } else {
         cask.Response(
-          renderOcrEditPage(Some(email), settings, entry).render,
+          renderOcrEditPage(Some(email), settings, entry, pageLang).render,
           headers = Seq("Content-Type" -> "text/html; charset=utf-8")
         )
       }
@@ -252,12 +256,13 @@ object MaintenanceRoutes extends BaseRoutes {
     }
   }
 
-  def renderOcrPage(userEmail: Option[String], settings: AppSettings, history: Seq[OCRHistoryEntry]) = {
+  def renderOcrPage(userEmail: Option[String], settings: AppSettings, history: Seq[OCRHistoryEntry], pageLang: String = I18n.defaultLang) = {
     Components.layout(
-      "OCR Library", 
-      userEmail, 
+      "OCR Library",
+      userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         link(rel := "stylesheet", href := "/assets/css/shogiground.css"),
         raw(tag("style")("""
@@ -415,13 +420,14 @@ object MaintenanceRoutes extends BaseRoutes {
     )
   }
 
-  def renderOcrEditPage(userEmail: Option[String], settings: AppSettings, entry: Option[OCRHistoryEntry]) = {
+  def renderOcrEditPage(userEmail: Option[String], settings: AppSettings, entry: Option[OCRHistoryEntry], pageLang: String = I18n.defaultLang) = {
     val trainingCount = Await.result(TrainingRepository.countPieces(), 10.seconds)
     Components.layout(
-      if (entry.isDefined) "Edit OCR Scan" else "New OCR Scan", 
-      userEmail, 
+      if (entry.isDefined) "Edit OCR Scan" else "New OCR Scan",
+      userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         link(rel := "stylesheet", href := "/assets/css/shogiground.css"),
         link(rel := "stylesheet", href := "/assets/css/portella.css"),
@@ -1167,42 +1173,44 @@ object MaintenanceRoutes extends BaseRoutes {
       val initialPlayer = player.getOrElse(search_text.getOrElse(""))
       val targetEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(targetEmail), 10.seconds)
-      
+      val pageLang = getLang(request)
+
       if (!settings.isConfigured) {
         logger.info(s"[MY-GAMES] Redirecting to /config because settings are not configured or still defaults for $targetEmail")
         noCacheRedirect("/config")
       } else {
         cask.Response(
-          renderMaintenancePage(initialPlayer, Some(email), settings).render,
+          renderMaintenancePage(initialPlayer, Some(email), settings, pageLang).render,
           headers = Seq("Content-Type" -> "text/html; charset=utf-8")
         )
       }
     }
   }
 
-  def renderMaintenancePage(initialPlayer: String = "", userEmail: Option[String] = None, settings: AppSettings) = {
+  def renderMaintenancePage(initialPlayer: String = "", userEmail: Option[String] = None, settings: AppSettings, pageLang: String = I18n.defaultLang)(implicit lang: String = pageLang) = {
     Components.layout(
-      "My Games Dashboard", 
-      userEmail, 
+      I18n.t("maintenance.dashboardTitle"),
+      userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         script(src := "https://cdn.jsdelivr.net/npm/chart.js"),
         script(src := "/js/maintenance.js")
       )
     )(
       div(cls := "d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4")(
-        h1(cls := "mb-0")("Shogi Game Fetcher"),
+        h1(cls := "mb-0")(I18n.t("maintenance.pageTitle")),
         div(cls := "d-flex gap-2")(
-          button(cls := "btn btn-outline-warning reload-data", title := "Refresh data") (
-            i(cls := "bi bi-arrow-clockwise me-1"), "Refresh"
+          button(cls := "btn btn-outline-warning reload-data", title := I18n.t("maintenance.refreshData")) (
+            i(cls := "bi bi-arrow-clockwise me-1"), I18n.t("maintenance.refresh")
           ),
-          a(href := "/viewer", cls := "btn btn-info")("Puzzles")
+          a(href := "/viewer", cls := "btn btn-info")(I18n.t("nav.puzzles"))
         )
       ),
-      Components.gameFetcherCard("Lishogi Games", "lishogi", settings.lishogiNickname, "Click 'Fetch' to load Lishogi games."),
-      Components.gameFetcherCard("ShogiWars Games", "shogiwars", settings.shogiwarsNickname, "Click 'Fetch' to load ShogiWars games."),
-      Components.gameFetcherCard("81Dojo Games", "dojo81", settings.dojo81Nickname, "Click 'Fetch' to load 81Dojo games."),
+      Components.gameFetcherCard(I18n.t("maintenance.lishogi"), "lishogi", settings.lishogiNickname, I18n.t("maintenance.fetchHint")),
+      Components.gameFetcherCard(I18n.t("maintenance.shogiwars"), "shogiwars", settings.shogiwarsNickname, I18n.t("maintenance.fetchHint")),
+      Components.gameFetcherCard(I18n.t("maintenance.dojo81"), "dojo81", settings.dojo81Nickname, I18n.t("maintenance.fetchHint")),
       
       input(`type` := "hidden", id := "lishogiNickname", value := settings.lishogiNickname),
       input(`type` := "hidden", id := "shogiwarsNickname", value := settings.shogiwarsNickname),
@@ -1213,7 +1221,7 @@ object MaintenanceRoutes extends BaseRoutes {
         div(cls := "modal-dialog modal-fullscreen")(
           div(cls := "modal-content bg-dark text-light border-secondary")(
             div(cls := "modal-header border-secondary")(
-              h5(cls := "modal-title", id := "graphTitle")("Game Analysis Graph"),
+              h5(cls := "modal-title", id := "graphTitle")(I18n.t("maintenance.graphTitle")),
               button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
             ),
             div(cls := "modal-body d-flex flex-column")(
