@@ -52,7 +52,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
   }
 
   @cask.get("/puzzle-creator/new")
-  def puzzleCreatorNew(request: cask.Request, sfen: String = "", blunder: String = "", comment: String = "") = {
+  def puzzleCreatorNew(request: cask.Request, sfen: String = "", blunder: String = "", comment: String = "", prelude: String = "", rootSfen: String = "") = {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
@@ -386,6 +386,39 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                     textarea(cls := "form-control form-control-sm", id := "puzzle-sfen", rows := "3", placeholder := "Enter SFEN notation")
                   )
                 ),
+                div(cls := "row g-2 mb-2")(
+                  div(cls := "col-12")(
+                    label(cls := "form-label text-light small mb-1")(
+                      i(cls := "bi bi-collection-play me-1 text-warning"), "Prelude Moves"
+                    ),
+                    div(id := "prelude-moves-visual", cls := "d-flex flex-wrap gap-1 mb-1 small")(),
+                    input(cls := "form-control form-control-sm font-monospace mb-1", id := "puzzle-prelude", `type` := "text",
+                      placeholder := "USI sequence before puzzle (e.g. 7g7f 3c3d 8h2b+)")
+                  )
+                ),
+                div(cls := "row g-2 mb-1")(
+                  div(cls := "col-12")(
+                    input(cls := "form-control form-control-sm font-monospace", id := "puzzle-root-sfen", `type` := "text",
+                      style := "color:#888;font-size:0.8em;",
+                      placeholder := "Root SFEN (starting position before prelude)"),
+                    small(cls := "text-muted")("Root position from which the prelude starts")
+                  )
+                ),
+                div(cls := "row g-2 mb-3")(
+                  div(cls := "col")(
+                    div(cls := "form-check mt-1")(
+                      input(cls := "form-check-input", id := "puzzle-play-prelude", `type` := "checkbox"),
+                      label(cls := "form-check-label text-light small", `for` := "puzzle-play-prelude")(
+                        "Play prelude animation before puzzle"
+                      )
+                    )
+                  ),
+                  div(cls := "col-auto")(
+                    button(cls := "btn btn-sm btn-outline-info", id := "preview-prelude", `type` := "button")(
+                      i(cls := "bi bi-play-fill me-1"), "Preview"
+                    )
+                  )
+                ),
                 div(cls := "row g-2 mb-3")(
                   div(cls := "col-12")(
                     label(cls := "form-label text-light")("Comments (optional)"),
@@ -560,13 +593,16 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val blunderAnalyses = json.obj.get("blunderAnalyses").flatMap(v => if (v.isNull) None else Some(v.str))
       val id = json.obj.get("id").map(_.str)
       val status = json.obj.get("status").map(_.str).getOrElse("accepted")
+      val prelude = json.obj.get("prelude").map(v => if (v.isNull) "" else v.str)
+      val rootSfen = json.obj.get("rootSfen").map(v => if (v.isNull) "" else v.str)
+      val playPrelude = json.obj.get("playPrelude").map(_.bool)
 
       val result = id match {
         case Some(puzzleId) =>
-          Await.result(PuzzleRepository.updatePuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses), 10.seconds)
+          Await.result(PuzzleRepository.updatePuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses, prelude, rootSfen, playPrelude), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(PuzzleRepository.savePuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, status = status, tags = tags, blunderAnalyses = blunderAnalyses), 10.seconds)
+          Await.result(PuzzleRepository.savePuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, status = status, tags = tags, blunderAnalyses = blunderAnalyses, prelude = prelude, rootSfen = rootSfen, playPrelude = playPrelude), 10.seconds)
           ujson.Obj("success" -> true, "message" -> (if (status == "review") "Puzzle saved as draft" else "Puzzle saved successfully"))
       }
       

@@ -278,6 +278,39 @@ export async function importLishogiStudy() {
     }
 }
 
+export async function reloadStudyGroup(ids) {
+    const idList = ids.split(',').filter(id => id);
+    if (!confirm(`Reload ${idList.length} chapter(s) from Lishogi?`)) return;
+
+    const btn = event.currentTarget;
+    const originalHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '<i class="bi bi-hourglass-split"></i>';
+
+    const results = [];
+    for (const id of idList) {
+        try {
+            const response = await fetch(`/repertoire/${id}/reload-from-study`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{}'
+            });
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.error || 'Failed');
+            results.push({ id, moveCount: data.moveCount, success: true });
+        } catch (e) {
+            results.push({ id, error: e.message, success: false });
+        }
+    }
+
+    const succeeded = results.filter(r => r.success).length;
+    const lines = results.map(r =>
+        r.success ? `✓ ${r.id} (${r.moveCount} moves)` : `✗ ${r.id}: ${r.error}`
+    );
+    alert(`Reloaded ${succeeded} / ${idList.length} chapters.\n\n${lines.join('\n')}`);
+    window.location.reload();
+}
+
 let activeSourceFilter = 'all';
 
 export function filterRepertoires() {
@@ -347,6 +380,7 @@ window.importLishogiStudy = importLishogiStudy;
 window.filterRepertoires = filterRepertoires;
 window.setSourceFilter = setSourceFilter;
 window.deleteStudyGroup = deleteStudyGroup;
+window.reloadStudyGroup = reloadStudyGroup;
 
 document.addEventListener('DOMContentLoaded', () => {
     const isAutoReloadCheckbox = document.getElementById('isAutoReload');

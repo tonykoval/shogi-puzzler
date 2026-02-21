@@ -1,5 +1,98 @@
 let data, ids, sg, selected, selectedData
 let isPlayingSequence = false;
+
+// ── Prelude (position-replay) ─────────────────────────────────────────────────
+let _preludeQueue = [], _preludeTimer = null, _preludePos = null;
+let _preludeOnDone = null, _preludeTotalMoves = 0, _preludeStepsDone = 0;
+
+function getPreludeSpeed() { const v = parseInt(localStorage.getItem('preludeSpeed')); return isNaN(v) ? 400 : v; }
+function setPreludeSpeed(ms) {
+    localStorage.setItem('preludeSpeed', String(ms));
+    _syncPreludeSpeedBtns();
+    if (ms > 0 && _preludeQueue.length > 0 && !_preludeTimer)
+        _preludeTimer = setTimeout(_preludeStep, ms);
+}
+function advancePrelude() { if (_preludeQueue.length) _preludeStep(); }
+function skipPrelude() {
+    if (_preludeTimer) { clearTimeout(_preludeTimer); _preludeTimer = null; }
+    while (_preludeQueue.length) _applyPreludeMove(_preludeQueue.shift());
+    _preludeDone();
+}
+function _applyPreludeMove(usi) {
+    const move = Shogiops.parseUsi(usi);
+    if (!move || !_preludePos) return;
+    _preludePos.play(move);
+    const [board, , hands] = Shogiops.sfen.makeSfen(_preludePos).split(' ');
+    const lastDests = 'role' in move ? [Shogiops.makeSquare(move.to)]
+        : [Shogiops.makeSquare(move.from), Shogiops.makeSquare(move.to)];
+    const lastPiece = 'role' in move
+        ? { role: move.role, color: _preludePos.turn === 'sente' ? 'gote' : 'sente' } : undefined;
+    sg.set({ sfen: { board, hands: hands || '-' }, turnColor: _preludePos.turn, lastDests, lastPiece });
+}
+function _preludeStep() {
+    _preludeTimer = null;
+    if (!_preludeQueue.length) { _preludeDone(); return; }
+    _applyPreludeMove(_preludeQueue.shift());
+    _preludeStepsDone++;
+    _updatePreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) return;
+    _preludeTimer = setTimeout(_preludeStep, spd);
+}
+function _preludeDone() {
+    _hidePreludeBar();
+    const cb = _preludeOnDone;
+    _preludeOnDone = null; _preludeQueue = []; _preludeTimer = null; _preludePos = null;
+    cb && cb();
+}
+function startPrelude(usis, rootSfenStr, onDone) {
+    if (!usis.length) { onDone && onDone(); return; }
+    _preludeQueue = [...usis]; _preludeTotalMoves = usis.length; _preludeStepsDone = 0;
+    _preludeOnDone = onDone;
+    _preludePos = Shogiops.sfen.parseSfen('standard', rootSfenStr, false).value;
+    sg.set({ movable: { free: false, color: 'none' }, droppable: { free: false, color: 'none' } });
+    // Set board to root position
+    const [board, , hands] = rootSfenStr.split(' ');
+    sg.set({ sfen: { board, hands: hands || '-' }, turnColor: _preludePos.turn });
+    _showPreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) _preludeStep();
+    else _preludeTimer = setTimeout(_preludeStep, Math.min(spd, 300));
+}
+function _showPreludeBar() {
+    if (document.getElementById('prelude-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'prelude-bar'; bar.className = 'prelude-bar';
+    bar.innerHTML = `
+        <div class="prelude-bar__info"><i class="bi bi-play-fill me-1"></i>
+            <span id="prelude-bar-text">Preparing position… 0 / ${_preludeTotalMoves}</span></div>
+        <div class="prelude-bar__controls">
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="200" onclick="setPreludeSpeed(200)">Fast</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="400" onclick="setPreludeSpeed(400)">Normal</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="700" onclick="setPreludeSpeed(700)">Slow</button>
+                <button class="btn btn-sm btn-outline-secondary prelude-speed-btn" data-speed="0" onclick="setPreludeSpeed(0)">Manual</button>
+            </div>
+            <button class="btn btn-sm btn-outline-warning ms-2" id="prelude-next-btn" onclick="advancePrelude()">▶ Next</button>
+            <button class="btn btn-sm btn-outline-info ms-1" onclick="skipPrelude()">Skip ⏭</button>
+        </div>`;
+    document.body.appendChild(bar);
+    _syncPreludeSpeedBtns();
+}
+function _hidePreludeBar() { const b = document.getElementById('prelude-bar'); if (b) b.remove(); }
+function _updatePreludeBar() {
+    const t = document.getElementById('prelude-bar-text');
+    if (t) t.textContent = `Preparing position… ${_preludeStepsDone} / ${_preludeTotalMoves}`;
+    const n = document.getElementById('prelude-next-btn');
+    if (n) n.style.display = getPreludeSpeed() === 0 ? '' : 'none';
+}
+function _syncPreludeSpeedBtns() {
+    const spd = getPreludeSpeed();
+    document.querySelectorAll('.prelude-speed-btn').forEach(b => b.classList.toggle('active', parseInt(b.dataset.speed) === spd));
+    const n = document.getElementById('prelude-next-btn');
+    if (n) n.style.display = spd === 0 ? '' : 'none';
+}
+// ─────────────────────────────────────────────────────────────────────────────
 let currentSequenceMoves = [];
 let currentSequenceIndex = -1;
 let autoplayInterval = null;
@@ -766,6 +859,17 @@ function selectSituation(id, data) {
         },
     });
 
+    // Play prelude (move sequence leading to this position) if stored with the puzzle
+    // Respects play_prelude flag: undefined = play (backward compat), false = skip
+    if (selected.prelude && selected.root_sfen && selected.play_prelude !== false) {
+        const usis = selected.prelude.trim().split(' ').filter(Boolean);
+        if (usis.length) {
+            startPrelude(usis, selected.root_sfen, () => {
+                sg.set(generateConfig(selected)); // restore interactive puzzle state
+            });
+        }
+    }
+
     // Check training deck status
     if (selected._id && selected._id.$oid) {
         checkTrainingDeck(selected._id.$oid);
@@ -1104,7 +1208,7 @@ function getEngineAnalysisButton(sfen, playerColor) {
                     </div>
                 </div>
                 <button class="btn btn-sm btn-warning w-100 mt-2 engine-analysis-btn" data-sfen="${currentSfen}" data-player="${playerColor}">
-                    <i class="bi bi-cpu me-1"></i>" + ((window.i18n && window.i18n['puzzle.engineAnalysis']) || 'Engine Analysis') + "
+                    <i class="bi bi-cpu me-1"></i>${(window.i18n && window.i18n['puzzle.engineAnalysis']) || 'Engine Analysis'}
                 </button>
                             </div>
         </div>
@@ -1306,7 +1410,7 @@ function runEngineAnalysis(sfen, playerColor, resultContainer) {
 
                 resultContainer.innerHTML = `
                     <div class="alert alert-light border mb-0">
-                        <strong><i class="bi bi-cpu me-1"></i>" + ((window.i18n && window.i18n['puzzle.engine']) || 'Engine:') + "</strong>
+                        <strong><i class="bi bi-cpu me-1"></i>${(window.i18n && window.i18n['puzzle.engine']) || 'Engine:'}</strong>
                         <span class="${scoreClass}" style="font-size: 1.1em; font-weight: bold;">${scoreText}</span>
                         <small class="text-muted ms-2">(${resultDepth} plies, ${timeUsed}s)</small>
                         ${pvHtml}

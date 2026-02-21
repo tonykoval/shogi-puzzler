@@ -112,6 +112,9 @@ object RepertoireRoutes extends BaseRoutes {
               a(href := studyUrl, target := "_blank", cls := "text-muted small ms-auto me-3", onclick := "event.stopPropagation();")(
                 i(cls := "bi bi-box-arrow-up-right me-1"), "Lishogi"
               ),
+              button(cls := "btn btn-sm btn-outline-warning me-1", onclick := s"reloadStudyGroup('${reps.map(r => r.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")).mkString(",")}'); event.stopPropagation();", title := "Reload all chapters from Lishogi")(
+                i(cls := "bi bi-arrow-repeat")
+              ),
               button(cls := "btn btn-sm btn-outline-danger", onclick := s"deleteStudyGroup('${reps.map(r => r.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")).mkString(",")}'); event.stopPropagation();", title := "Delete all chapters")(
                 i(cls := "bi bi-trash")
               )
@@ -624,7 +627,6 @@ object RepertoireRoutes extends BaseRoutes {
       }
     }
   }
-
   @cask.post("/repertoire/toggle-public")
   def togglePublic(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
@@ -827,6 +829,23 @@ object RepertoireRoutes extends BaseRoutes {
       body(cls := "wood coords-out playing online")(
         Components.renderHeader(userEmail, settings, appVersion, pageLang),
         div(attr("id") := "main-wrap")(
+          div(cls := "rp-main-col")(
+            div(cls := "puzzle__board-header")(
+              h2(cls := "puzzle__board-header__title")(name),
+              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
+                div(cls := "puzzle__board-header__source")(
+                  if (sourceAuthor.nonEmpty) frag(
+                    i(cls := "bi bi-person me-1"),
+                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank")(sourceAuthor)
+                  ) else frag(),
+                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
+                  if (studyUrl.nonEmpty) frag(
+                    i(cls := "bi bi-book me-1"),
+                    a(href := studyUrl, attr("target") := "_blank")("Lishogi Study")
+                  ) else frag()
+                )
+              } else frag()
+            ),
           tag("main")(cls := "puzzle puzzle-play")(
             div(cls := "puzzle__board main-board")(
               div(cls := "sg-wrap d-9x9")(
@@ -846,20 +865,6 @@ object RepertoireRoutes extends BaseRoutes {
                   )
                 )
               ),
-              h2(cls := "puzzle__comment__title")(name),
-              if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
-                div(cls := "puzzle__comment__source small mb-2")(
-                  if (sourceAuthor.nonEmpty) frag(
-                    i(cls := "bi bi-person me-1"),
-                    a(href := s"https://lishogi.org/@/$sourceAuthor", attr("target") := "_blank")(sourceAuthor)
-                  ) else frag(),
-                  if (sourceAuthor.nonEmpty && studyUrl.nonEmpty) tag("span")(cls := "mx-1")(" · ") else frag(),
-                  if (studyUrl.nonEmpty) frag(
-                    i(cls := "bi bi-book me-1"),
-                    a(href := studyUrl, attr("target") := "_blank")("Lishogi Study")
-                  ) else frag()
-                )
-              } else frag(),
               div(attr("id") := "comment-display", style := "display:none;")
             ),
 
@@ -873,18 +878,16 @@ object RepertoireRoutes extends BaseRoutes {
                         div(attr("id") := "variation-list")(
                           "Loading moves..."
                         )
+                      ),
+                      div(cls := "analyse__moves__import d-flex flex-wrap gap-1 pt-2 mt-2")(
+                        button(cls := "btn btn-sm btn-outline-success", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal", title := "Import moves from KIF file")(i(cls := "bi bi-file-earmark-arrow-up me-1"), "Import KIF"),
+                        button(cls := "btn btn-sm btn-outline-light", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import USI move sequence")(i(cls := "bi bi-list-ol me-1"), "Import USI")
                       )
                     ),
                     div(cls := "analyse__tools__actions")(
                       div(cls := "btn-group btn-group-sm w-100")(
-                        button(cls := "btn btn-outline-warning", onclick := "saveDraftPuzzle()", title := "Save current position as draft puzzle")(i(cls := "bi bi-pencil-square me-1"), tag("span")(cls := "d-none d-lg-inline")("Draft")),
                         button(cls := "btn btn-outline-warning", onclick := "reviewInPuzzleCreator()", title := "Open in Puzzle Creator for review")(i(cls := "bi bi-puzzle me-1"), tag("span")(cls := "d-none d-lg-inline")("Review")),
                         button(cls := "btn btn-outline-info", onclick := "window.open('https://lishogi.org/analysis/' + currentSfen.replace(/ /g, '_'), '_blank')", title := "Analyze on Lishogi")(i(cls := "bi bi-search me-1"), tag("span")(cls := "d-none d-lg-inline")("Lishogi"))
-                      ),
-                      div(cls := "btn-group btn-group-sm w-100 mt-1")(
-                        button(cls := "btn btn-outline-success", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal", title := "Import moves from KIF file")(i(cls := "bi bi-file-earmark-arrow-up me-1"), tag("span")(cls := "d-none d-lg-inline")("Import KIF")),
-                        button(cls := "btn btn-outline-light", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importMovesModal", title := "Import USI move sequence")(i(cls := "bi bi-list-ol me-1"), tag("span")(cls := "d-none d-lg-inline")("Import USI")),
-                        if (sourceUrl.nonEmpty) button(cls := "btn btn-outline-info", attr("id") := "reloadStudyBtn", onclick := "reloadFromStudy()", title := "Reload moves from Lishogi study")(i(cls := "bi bi-arrow-repeat me-1"), tag("span")(cls := "d-none d-lg-inline")("Reload Study")) else frag()
                       )
                     )
                   )
@@ -892,6 +895,7 @@ object RepertoireRoutes extends BaseRoutes {
                 div(cls := "puzzle__feedback")()
               )
             )
+          )
           )
         ),
         script(src := "/js/shogiground.js"),

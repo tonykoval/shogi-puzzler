@@ -3,6 +3,7 @@ let sg;
 let repertoire;
 let currentSfen;
 let history = [];
+let moveHistory = []; // USI moves parallel to history (SFENs)
 const repertoireId = document.getElementById('repertoireId').value;
 
 let editingMove = null; // { parentSfen, usi, comment, isPuzzle }
@@ -221,6 +222,7 @@ async function handleMove(moveData) {
         editingCommentUsi = null;
         lastMoveComment = null; // new move has no comment yet
         history.push(currentSfen);
+        moveHistory.push(usi);
         currentSfen = nextSfen;
         await loadRepertoire(usi);
     } catch (e) {
@@ -1018,6 +1020,7 @@ export function revertMove() {
         editingCommentUsi = null;
         lastMoveComment = null;
         currentSfen = history.pop();
+        moveHistory.pop();
         renderBoard();
         renderVariations();
         updateMenuState();
@@ -1031,6 +1034,7 @@ export function toRoot() {
         editingCommentUsi = null;
         lastMoveComment = null;
         history = [];
+        moveHistory = [];
         currentSfen = repertoire.rootSfen;
         renderBoard();
         renderVariations();
@@ -1049,6 +1053,7 @@ export function advanceMove() {
         editingCommentUsi = null;
         lastMoveComment = move.comment || null;
         history.push(currentSfen);
+        moveHistory.push(move.usi);
         currentSfen = move.nextSfen;
         renderBoard(move.usi);
         renderVariations();
@@ -1188,6 +1193,8 @@ function reviewInPuzzleCreator() {
 
     const params = new URLSearchParams();
     params.set('sfen', currentSfen);
+    if (moveHistory.length) params.set('prelude', moveHistory.join(' '));
+    if (repertoire.rootSfen) params.set('rootSfen', repertoire.rootSfen);
     if (puzzleMove) {
         params.set('blunder', puzzleMove.usi);
         if (puzzleMove.comment) {
@@ -1216,6 +1223,8 @@ async function saveDraftPuzzle() {
         comments: '',
         isPublic: false,
         tags: [],
+        prelude: moveHistory.length ? moveHistory.join(' ') : '',
+        rootSfen: repertoire.rootSfen || '',
     };
 
     try {
@@ -1247,9 +1256,9 @@ function sendToPuzzleCreator(parentSfen, move) {
     const params = new URLSearchParams();
     params.set('sfen', parentSfen);
     params.set('blunder', move.usi);
-    if (move.comment) {
-        params.set('comment', move.comment);
-    }
+    if (move.comment) params.set('comment', move.comment);
+    if (moveHistory.length) params.set('prelude', moveHistory.join(' '));
+    if (repertoire.rootSfen) params.set('rootSfen', repertoire.rootSfen);
     window.open(`/puzzle-creator/new?${params.toString()}`, '_blank');
     clearAndAdvancePuzzle(parentSfen, move);
 }

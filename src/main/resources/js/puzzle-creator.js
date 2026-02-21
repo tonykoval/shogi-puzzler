@@ -14,6 +14,13 @@ let moveComments = {}; // Store comments for moves: { "candidateIndex_moveIndex"
 let blunderMoves = []; // Store blunder move USI strings (e.g. ["7g7f", "P*5e"])
 let isCapturingBlunder = false; // "Pick from board" mode for blunder moves
 let tags = []; // Store tag strings for categorization
+let _preludeQueue = [];
+let _preludeTimer = null;
+let _preludePos = null;
+let _preludeOnDone = null;
+let _preludeTotalMoves = 0;
+let _preludeStepsDone = 0;
+let _preludeSfenAfter = null; // puzzle SFEN to restore after prelude
 
 // Helper functions for sequence type detection
 function isBlunderSequence(seq) { return seq[0] && seq[0]._type === 'blunder'; }
@@ -30,6 +37,140 @@ function getPuzzleListUrl() {
     const game = getGameFilter();
     return game ? `/puzzle-creator?game=${encodeURIComponent(game)}` : '/puzzle-creator';
 }
+
+// ── Prelude UI helpers ────────────────────────────────────────────────────────
+
+function renderPreludeVisual() {
+    const prelude = $('#puzzle-prelude').val().trim();
+    const moves = prelude ? prelude.split(' ').filter(Boolean) : [];
+    const container = $('#prelude-moves-visual');
+    container.empty();
+    if (moves.length > 0) {
+        moves.forEach((m, i) => {
+            container.append(
+                $(`<span class="badge bg-secondary border border-dark text-light me-1" style="font-family:monospace;">${i + 1}. ${m}</span>`)
+            );
+        });
+    } else {
+        container.append($('<span class="text-muted" style="font-size:0.8em;">No prelude moves</span>'));
+    }
+}
+
+// ── Prelude (position-replay) helpers ────────────────────────────────────────
+
+function getPreludeSpeed() {
+    const v = parseInt(localStorage.getItem('preludeSpeed'));
+    return isNaN(v) ? 400 : v;
+}
+function setPreludeSpeed(ms) {
+    localStorage.setItem('preludeSpeed', String(ms));
+    _syncPreludeSpeedBtns();
+    if (ms > 0 && _preludeQueue.length > 0) {
+        // Restart auto-advance if switching from manual
+        if (!_preludeTimer) _preludeTimer = setTimeout(_preludeStep, ms);
+    }
+}
+function advancePrelude() { if (_preludeQueue.length) _preludeStep(); }
+function skipPrelude() {
+    if (_preludeTimer) { clearTimeout(_preludeTimer); _preludeTimer = null; }
+    while (_preludeQueue.length) _applyPreludeMove(_preludeQueue.shift());
+    _preludeDone();
+}
+
+function _applyPreludeMove(usi) {
+    const move = Shogiops.parseUsi(usi);
+    if (!move || !_preludePos) return;
+    _preludePos.play(move);
+    const newSfen = Shogiops.sfen.makeSfen(_preludePos);
+    const [board, , hands] = newSfen.split(' ');
+    const lastDests = 'role' in move
+        ? [Shogiops.makeSquare(move.to)]
+        : [Shogiops.makeSquare(move.from), Shogiops.makeSquare(move.to)];
+    const lastPiece = 'role' in move
+        ? { role: move.role, color: _preludePos.turn === 'sente' ? 'gote' : 'sente' }
+        : undefined;
+    sg.set({ sfen: { board, hands: hands || '-' }, turnColor: _preludePos.turn, lastDests, lastPiece });
+}
+
+function _preludeStep() {
+    _preludeTimer = null;
+    if (!_preludeQueue.length) { _preludeDone(); return; }
+    _applyPreludeMove(_preludeQueue.shift());
+    _preludeStepsDone++;
+    _updatePreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) return; // manual — wait for button click
+    _preludeTimer = setTimeout(_preludeStep, spd);
+}
+
+function _preludeDone() {
+    _hidePreludeBar();
+    const cb = _preludeOnDone;
+    _preludeOnDone = null; _preludeQueue = []; _preludeTimer = null; _preludePos = null;
+    cb && cb();
+}
+
+function startPrelude(usis, rootSfenStr, onDone) {
+    if (!usis.length) { onDone && onDone(); return; }
+    _preludeQueue = [...usis];
+    _preludeTotalMoves = usis.length;
+    _preludeStepsDone = 0;
+    _preludeOnDone = onDone;
+    _preludePos = Shogiops.sfen.parseSfen('standard', rootSfenStr, false).value;
+    sg.set({ movable: { free: false, color: 'none' }, droppable: { free: false, color: 'none' } });
+    _showPreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) _preludeStep(); // play first move, then wait for clicks
+    else _preludeTimer = setTimeout(_preludeStep, Math.min(spd, 300));
+}
+
+function _showPreludeBar() {
+    if (document.getElementById('prelude-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'prelude-bar';
+    bar.className = 'prelude-bar';
+    bar.innerHTML = `
+        <div class="prelude-bar__info">
+            <i class="bi bi-play-fill me-1"></i>
+            <span id="prelude-bar-text">Preparing position… 0 / ${_preludeTotalMoves}</span>
+        </div>
+        <div class="prelude-bar__controls">
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="200" onclick="setPreludeSpeed(200)">Fast</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="400" onclick="setPreludeSpeed(400)">Normal</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="700" onclick="setPreludeSpeed(700)">Slow</button>
+                <button class="btn btn-sm btn-outline-secondary prelude-speed-btn" data-speed="0" onclick="setPreludeSpeed(0)">Manual</button>
+            </div>
+            <button class="btn btn-sm btn-outline-warning ms-2" id="prelude-next-btn" onclick="advancePrelude()">▶ Next</button>
+            <button class="btn btn-sm btn-outline-info ms-1" onclick="skipPrelude()">Skip ⏭</button>
+        </div>`;
+    document.body.appendChild(bar);
+    _syncPreludeSpeedBtns();
+}
+function _hidePreludeBar() {
+    const bar = document.getElementById('prelude-bar');
+    if (bar) bar.remove();
+}
+function _updatePreludeBar() {
+    const txt = document.getElementById('prelude-bar-text');
+    if (txt) txt.textContent = `Preparing position… ${_preludeStepsDone} / ${_preludeTotalMoves}`;
+    const nextBtn = document.getElementById('prelude-next-btn');
+    if (nextBtn) nextBtn.style.display = getPreludeSpeed() === 0 ? '' : 'none';
+}
+function _syncPreludeSpeedBtns() {
+    const spd = getPreludeSpeed();
+    document.querySelectorAll('.prelude-speed-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.speed) === spd);
+    });
+    const nextBtn = document.getElementById('prelude-next-btn');
+    if (nextBtn) nextBtn.style.display = spd === 0 ? '' : 'none';
+}
+
+window.setPreludeSpeed = setPreludeSpeed;
+window.advancePrelude = advancePrelude;
+window.skipPrelude = skipPrelude;
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Initialize the board
 function initBoard(sfen = null) {
@@ -236,6 +377,16 @@ function loadPuzzle(puzzle, showToast) {
     $('#puzzle-comments').val(puzzle.comments || '');
     $('#puzzle-public').prop('checked', puzzle.is_public || false);
 
+    // Load prelude fields
+    const preludeVal = puzzle.prelude || '';
+    const rootSfenVal = puzzle.root_sfen || '';
+    $('#puzzle-prelude').val(preludeVal);
+    $('#puzzle-root-sfen').val(rootSfenVal);
+    // play_prelude: if explicitly false → unchecked; if true or missing but has prelude → checked
+    const pp = puzzle.play_prelude;
+    $('#puzzle-play-prelude').prop('checked', pp === true || (pp == null && preludeVal.trim().length > 0));
+    renderPreludeVisual();
+
     // Load move comments if available
     if (puzzle.move_comments) {
         loadMoveComments(puzzle.move_comments);
@@ -372,16 +523,20 @@ function savePuzzleWithStatus(status) {
         return;
     }
 
+    const urlParams = new URLSearchParams(window.location.search);
     const data = {
         name: name,
         sfen: sfen || '',
         comments: comments || '',
         isPublic: isPublic,
         status: status,
-        moveComments: getAllMoveComments(), // Include move comments
-        blunderMoves: blunderMoves, // Include blunder moves
-        tags: tags, // Include tags
-        blunderAnalyses: window.blunderAnalyses ? JSON.stringify(window.blunderAnalyses) : null // Include blunder analyses
+        moveComments: getAllMoveComments(),
+        blunderMoves: blunderMoves,
+        tags: tags,
+        blunderAnalyses: window.blunderAnalyses ? JSON.stringify(window.blunderAnalyses) : null,
+        prelude: $('#puzzle-prelude').val().trim(),
+        rootSfen: $('#puzzle-root-sfen').val().trim(),
+        playPrelude: $('#puzzle-play-prelude').is(':checked'),
     };
 
     if (currentPuzzleId) {
@@ -1729,22 +1884,73 @@ $(document).ready(function() {
         const sfenParam = urlParams.get('sfen');
         const blunderParam = urlParams.get('blunder');
         const commentParam = urlParams.get('comment');
+        const preludeParam = urlParams.get('prelude');
+        const rootSfenParam = urlParams.get('rootSfen');
+
+        if (blunderParam) blunderMoves = [blunderParam];
+        if (commentParam) $('#puzzle-name').val(commentParam);
+
+        // Populate prelude UI from URL params
+        if (preludeParam) {
+            $('#puzzle-prelude').val(preludeParam);
+            $('#puzzle-play-prelude').prop('checked', true);
+        }
+        if (rootSfenParam) {
+            $('#puzzle-root-sfen').val(rootSfenParam);
+        }
+        renderPreludeVisual();
 
         if (sfenParam) {
             $('#puzzle-sfen').val(sfenParam);
-            initBoard(sfenParam);
-            if (blunderParam) {
-                blunderMoves = [blunderParam];
-            }
-            if (commentParam) {
-                $('#puzzle-name').val(commentParam);
+            _preludeSfenAfter = sfenParam;
+            const usis = preludeParam ? preludeParam.trim().split(' ').filter(Boolean) : [];
+            if (usis.length && rootSfenParam) {
+                initBoard(rootSfenParam);
+                startPrelude(usis, rootSfenParam, () => {
+                    initialSfen = sfenParam;
+                    initBoard(sfenParam);
+                    renderBlunderMovesUI();
+                    renderTagsUI();
+                });
+            } else {
+                initBoard(sfenParam);
+                renderBlunderMovesUI();
+                renderTagsUI();
             }
         } else {
             initBoard();
+            renderBlunderMovesUI();
+            renderTagsUI();
         }
-        renderBlunderMovesUI();
-        renderTagsUI();
     }
+
+    // Prelude: update visual badges when input changes
+    $('#puzzle-prelude').on('input', function() {
+        renderPreludeVisual();
+    });
+
+    // Prelude: preview button — play the prelude animation on the board
+    $('#preview-prelude').on('click', function() {
+        const prelude = $('#puzzle-prelude').val().trim();
+        const rootSfen = $('#puzzle-root-sfen').val().trim();
+        const puzzleSfen = $('#puzzle-sfen').val().trim();
+
+        if (!prelude) {
+            Swal.fire({ icon: 'info', title: 'No Prelude', text: 'No prelude moves defined.', timer: 1500, showConfirmButton: false });
+            return;
+        }
+
+        const usis = prelude.split(' ').filter(Boolean);
+        const startSfen = rootSfen || 'lnsgkgsnl/1r5b1/ppppppppp/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
+
+        initBoard(startSfen);
+        startPrelude(usis, startSfen, () => {
+            initialSfen = puzzleSfen || startSfen;
+            if (puzzleSfen) initBoard(puzzleSfen);
+            renderBlunderMovesUI();
+            if (arrowsVisible && allSequences.length > 0) displayCandidateArrows();
+        });
+    });
 
     // Save button handlers
     $('#save-puzzle').on('click', savePuzzle);

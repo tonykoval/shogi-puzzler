@@ -11,7 +11,7 @@ object PuzzleRepository {
 
   // --- Primary collection methods (formerly CustomPuzzleRepository) ---
 
-  def savePuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None, blunderAnalyses: Option[String] = None): Future[InsertOneResult] = {
+  def savePuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None, blunderAnalyses: Option[String] = None, prelude: Option[String] = None, rootSfen: Option[String] = None, playPrelude: Option[Boolean] = None): Future[InsertOneResult] = {
     import org.mongodb.scala.bson.BsonString
     import org.mongodb.scala.bson.collection.immutable.Document
 
@@ -32,6 +32,9 @@ object PuzzleRepository {
       "tags" -> tags.getOrElse(Seq.empty),
       "blunder_analyses" -> blunderAnalyses.getOrElse(""),
       "move_number" -> moveNumber.getOrElse(0),
+      "prelude" -> prelude.getOrElse(""),
+      "root_sfen" -> rootSfen.getOrElse(""),
+      "play_prelude" -> playPrelude.getOrElse(false),
       "created_at" -> System.currentTimeMillis(),
       "updated_at" -> System.currentTimeMillis()
     )
@@ -102,7 +105,7 @@ object PuzzleRepository {
       .toFutureOption()
   }
 
-  def updatePuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, blunderMoves: Option[Seq[String]] = None, tags: Option[Seq[String]] = None, blunderAnalyses: Option[String] = None): Future[UpdateResult] = {
+  def updatePuzzle(id: String, name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, blunderMoves: Option[Seq[String]] = None, tags: Option[Seq[String]] = None, blunderAnalyses: Option[String] = None, prelude: Option[String] = None, rootSfen: Option[String] = None, playPrelude: Option[Boolean] = None): Future[UpdateResult] = {
     import org.mongodb.scala.bson.BsonString
     import org.mongodb.scala.bson.collection.immutable.Document
 
@@ -121,6 +124,9 @@ object PuzzleRepository {
     updates += org.mongodb.scala.model.Updates.set("blunder_moves", blunderMoves.getOrElse(Seq.empty))
     updates += org.mongodb.scala.model.Updates.set("tags", tags.getOrElse(Seq.empty))
     updates += org.mongodb.scala.model.Updates.set("blunder_analyses", blunderAnalyses.getOrElse(""))
+    updates += org.mongodb.scala.model.Updates.set("prelude", prelude.getOrElse(""))
+    updates += org.mongodb.scala.model.Updates.set("root_sfen", rootSfen.getOrElse(""))
+    playPrelude.foreach(p => updates += org.mongodb.scala.model.Updates.set("play_prelude", p))
     updates += org.mongodb.scala.model.Updates.set("updated_at", System.currentTimeMillis())
 
     puzzlesCollection.updateOne(
@@ -308,6 +314,10 @@ object PuzzleRepository {
   }
 
   // --- Legacy read helpers for getPuzzlesForGame on legacy collection ---
+
+  def getLegacyPuzzles(): Future[Seq[Document]] = {
+    legacyPuzzlesCollection.find().toFuture()
+  }
 
   def getLegacyPuzzlesForGame(gameKifHash: String): Future[Seq[Document]] = {
     legacyPuzzlesCollection.find(org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash))
@@ -666,6 +676,20 @@ object PuzzleRepository {
         new BsonArray(tagsBson)
       })
       .append("created_at", new BsonDateTime(createdAt))
+
+    // Pass through prelude fields
+    val preludeStr = puzzle.getString("prelude")
+    if (preludeStr != null && preludeStr.nonEmpty) {
+      bsonDoc.append("prelude", new BsonString(preludeStr))
+    }
+    val rootSfenStr = puzzle.getString("root_sfen")
+    if (rootSfenStr != null && rootSfenStr.nonEmpty) {
+      bsonDoc.append("root_sfen", new BsonString(rootSfenStr))
+    }
+    puzzle.get("play_prelude") match {
+      case Some(v) if v.isBoolean => bsonDoc.append("play_prelude", new org.bson.BsonBoolean(v.asBoolean().getValue))
+      case _ =>
+    }
 
     // Pass through i18n translation fields
     puzzle.get("comments_i18n") match {

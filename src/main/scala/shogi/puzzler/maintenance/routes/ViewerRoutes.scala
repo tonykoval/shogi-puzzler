@@ -222,17 +222,16 @@ object ViewerRoutes extends BaseRoutes {
         }
       case None if isAuthenticated =>
         val email = userEmail.get
-        val userPuzzles = Await.result(PuzzleRepository.getPuzzlesForUser(email), 10.seconds)
-        logger.info(s"[VIEWER] Found ${userPuzzles.size} puzzles for user $email")
+        // Legacy puzzles are already in viewer format
+        val legacyPuzzles = Await.result(PuzzleRepository.getLegacyPuzzles(), 10.seconds)
+        logger.info(s"[VIEWER] Found ${legacyPuzzles.size} legacy puzzles")
 
+        // Custom puzzles must be converted to viewer format; only show accepted ones
         val acceptedPuzzles = Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
-        logger.info(s"[VIEWER] Found ${acceptedPuzzles.size} accepted puzzles for user $email")
+        logger.info(s"[VIEWER] Found ${acceptedPuzzles.size} accepted custom puzzles for user $email")
+        val convertedPuzzles = acceptedPuzzles.map(PuzzleRepository.convertToViewerFormat)
 
-        val convertedPuzzles = acceptedPuzzles.map { doc =>
-          PuzzleRepository.convertToViewerFormat(doc)
-        }
-
-        userPuzzles ++ convertedPuzzles
+        legacyPuzzles ++ convertedPuzzles
       case None =>
         val publicPuzzles = Await.result(PuzzleRepository.getAllPublicPuzzles(), 10.seconds)
         logger.info(s"[VIEWER] Found ${publicPuzzles.size} public puzzles")

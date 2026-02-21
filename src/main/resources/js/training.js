@@ -134,11 +134,36 @@ function showEmptyState() {
                 }
                 
                 $('#empty-state p').html((i18n['training.noPuzzlesDue'] || 'No puzzles are due for review right now.') + '<br>' + 
-                    (i18n['training.nextPuzzleAvailable'] || 'Next puzzle will be available {time}.').replace('{time}', nextText}) + '<br>' +
+                    (i18n['training.nextPuzzleAvailable'] || 'Next puzzle will be available {time}.').replace('{time}', nextText) + '<br>' +
                     (i18n['training.puzzleViewer'] ? 'Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">' + i18n['training.puzzleViewer'] + '</a> using the deck button.' : 'Add puzzles from the <a href="/viewer" style="color: #6ea8fe;">Puzzle Viewer</a> using the deck button.'));
             }
         }
     });
+}
+
+function setHint(move) {
+    if (move !== null && move !== undefined) {
+        if (move.drop !== null && move.drop !== undefined) {
+            return move.drop.hint;
+        } else {
+            return move.move.hint;
+        }
+    }
+    return null;
+}
+
+function showMoveArrows(pos) {
+    if (!sg) return;
+    const hints = [
+        setHint(pos.best_move),
+        setHint(pos.second_move),
+        setHint(pos.third_move),
+        setHint(pos.your_move)
+    ];
+    if (pos.blunder_moves && Array.isArray(pos.blunder_moves)) {
+        pos.blunder_moves.forEach(bm => hints.push(setHint(bm)));
+    }
+    sg.setAutoShapes(hints.filter(h => h !== null));
 }
 
 function isMove(engineMove, playerMove, playerPositionMove, returnValue) {
@@ -205,6 +230,10 @@ function resolveTrainingMove(pos, r0, r1, r2, r3) {
             loadStats();
         }
     });
+
+    // Freeze board and show move arrows
+    sg.set({ movable: { free: false, color: 'none' }, droppable: { free: false, color: 'none' } });
+    showMoveArrows(pos);
 
     // Show comment and hints
     if (pos.comment) {

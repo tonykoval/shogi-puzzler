@@ -3,6 +3,7 @@ let sg;
 let repertoire;
 let currentSfen;
 let history = [];
+let moveHistory = [];
 const repertoireId = document.getElementById('repertoireId').value;
 let lastMoveComment = null;
 
@@ -346,6 +347,7 @@ export function revertMove() {
     if (history.length > 0) {
         lastMoveComment = null;
         currentSfen = history.pop();
+        moveHistory.pop();
         renderBoard();
         renderVariations();
         updateMenuState();
@@ -357,6 +359,7 @@ export function toRoot() {
     if (currentSfen !== repertoire.rootSfen) {
         lastMoveComment = null;
         history = [];
+        moveHistory = [];
         currentSfen = repertoire.rootSfen;
         renderBoard();
         renderVariations();
@@ -373,6 +376,7 @@ export function advanceMove() {
         const move = node.moves[0];
         lastMoveComment = move.comment || null;
         history.push(currentSfen);
+        moveHistory.push(move.usi);
         currentSfen = move.nextSfen;
         renderBoard(move.usi);
         renderVariations();
