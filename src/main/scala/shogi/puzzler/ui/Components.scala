@@ -111,52 +111,108 @@ object Components {
           scalatags.Text.all.span(cls := "navbar-toggler-icon")
         ),
         div(cls := "collapse navbar-collapse", id := "navbarNav")(
-          ul(cls := "navbar-nav me-auto")(
-            if (canAccess("my-games")) {
+          // Full navigation for authenticated users
+          if (userEmail.isDefined) {
+            ul(cls := "navbar-nav me-auto")(
+              // Practice Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-practice")(
+                  i(cls := "bi bi-controller me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Practice"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Play")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-practice")(
+                  if (canAccess("my-games")) {
+                    li(a(cls := "dropdown-item", href := "/my-games")(i(cls := "bi bi-controller me-2"), I18n.t("nav.myGames")))
+                  } else (),
+                  if (canAccess("training")) {
+                    li(a(cls := "dropdown-item", href := "/training")(i(cls := "bi bi-mortarboard me-2"), I18n.t("nav.training")))
+                  } else ()
+                )
+              ),
+              // Puzzles Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-puzzles")(
+                  i(cls := "bi bi-puzzle me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Puzzles")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-puzzles")(
+                  li(a(cls := "dropdown-item", href := "/viewer")(i(cls := "bi bi-puzzle me-2"), I18n.t("nav.puzzles"))),
+                  li(a(cls := "dropdown-item", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.repertoires")))
+                )
+              ),
+              // Editor Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-editor")(
+                  i(cls := "bi bi-pencil-square me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Editor"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Edit")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-editor")(
+                  if (canAccess("repertoire")) {
+                    li(a(cls := "dropdown-item", href := "/repertoire")(i(cls := "bi bi-book me-2"), I18n.t("nav.repEditor")))
+                  } else (),
+                  if (canAccess("puzzle-creator")) {
+                    li(a(cls := "dropdown-item", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-2"), I18n.t("nav.puzzleEditor")))
+                  } else (),
+                  if (canAccess("ocr")) {
+                    li(a(cls := "dropdown-item", href := "/ocr")(i(cls := "bi bi-camera me-2"), I18n.t("nav.ocr")))
+                  } else ()
+                )
+              ),
+              // Settings Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-settings")(
+                  i(cls := "bi bi-gear me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Settings"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Settings")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-settings")(
+                  if (canAccess("config")) {
+                    li(a(cls := "dropdown-item", href := "/config")(i(cls := "bi bi-gear me-2"), I18n.t("nav.config")))
+                  } else (),
+                  if (canAccess("admin/users")) {
+                    li(a(cls := "dropdown-item", href := "/admin/users")(i(cls := "bi bi-people me-2"), I18n.t("nav.users")))
+                  } else ()
+                )
+              ),
+              // About (standalone)
               li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/my-games")(i(cls := "bi bi-controller me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.myGames")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.myGamesShort")))
+                a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
               )
-            } else (),
-            if (canAccess("repertoire")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/repertoire")(i(cls := "bi bi-book me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.repEditor")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.repEditorShort")))
-              )
-            } else (),
-            if (canAccess("puzzle-creator")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.puzzleEditor")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.puzzleEditorShort")))
-              )
-            } else (),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-puzzle me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.puzzles")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.puzzles")))
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.repertoires")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.repertoiresShort")))
-            ),
-            if (canAccess("training")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/training")(i(cls := "bi bi-mortarboard me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.training")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.trainingShort")))
-              )
-            } else (),
-            if (canAccess("config")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/config")(i(cls := "bi bi-gear me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.config")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.configShort")))
-              )
-            } else (),
-            if (canAccess("ocr")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/ocr")(i(cls := "bi bi-camera me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.ocr")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.ocrShort")))
-              )
-            } else (),
-            if (canAccess("admin/users")) {
-              li(cls := "nav-item")(
-                a(cls := "nav-link", href := "/admin/users")(i(cls := "bi bi-people me-1"), scalatags.Text.all.span(cls := "d-lg-inline d-none")(I18n.t("nav.users")), scalatags.Text.all.span(cls := "d-lg-none")(I18n.t("nav.users")))
-              )
-            } else (),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
             )
-          ),
+          } else {
+            // Minimal navigation for unauthenticated users
+            ul(cls := "navbar-nav me-auto")(
+              // Puzzles - public access
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-puzzles")(
+                  i(cls := "bi bi-puzzle me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Puzzles")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-puzzles")(
+                  li(a(cls := "dropdown-item", href := "/viewer")(i(cls := "bi bi-puzzle me-2"), I18n.t("nav.puzzles"))),
+                  li(a(cls := "dropdown-item", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.repertoires")))
+                )
+              ),
+              // About - public access
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
+              )
+            )
+          },
           div(cls := "navbar-text d-flex align-items-center flex-wrap gap-2")(
             if (userEmail.isDefined) {
               div(cls := "me-lg-3 text-light-50 my-1", style := "font-size: 0.85rem;")(
