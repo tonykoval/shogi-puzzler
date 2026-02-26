@@ -77,6 +77,21 @@ object ConfigRoutes extends BaseRoutes {
                 Components.configField(I18n.t("config.winChanceThreshold"), "win_chance_threshold", settings.winChanceDropThreshold.toString, "number", Some("any"))
               )
             ),
+            p(cls := "form-label fw-semibold mb-2 mt-2")(I18n.t("config.analyzeMoveSection")),
+            div(cls := "row")(
+              div(cls := "col-md-3 mb-3")(
+                Components.configField(I18n.t("viewgame.posCandidates"), "pos_analysis_candidates", settings.posAnalysisCandidates.toString, "number")
+              ),
+              div(cls := "col-md-3 mb-3")(
+                Components.configField(I18n.t("viewgame.posDepth"), "pos_analysis_depth", settings.posAnalysisDepth.toString, "number")
+              ),
+              div(cls := "col-md-3 mb-3")(
+                Components.configField(I18n.t("viewgame.posSeconds"), "pos_analysis_seconds", settings.posAnalysisSeconds.toString, "number")
+              ),
+              div(cls := "col-md-3 mb-3")(
+                Components.configField(I18n.t("viewgame.posSequences"), "pos_analysis_sequences", settings.posAnalysisSequences.toString, "number")
+              )
+            ),
             button(`type` := "submit", cls := "btn btn-primary w-100 w-md-auto")(I18n.t("config.save")),
             if (settings.shogiwarsNickname == "Tonyko") {
               div(cls := "alert alert-warning mt-3")(
@@ -100,6 +115,10 @@ object ConfigRoutes extends BaseRoutes {
       deep_limit: Int,
       win_chance_threshold: Double,
       lang: String,
+      pos_analysis_candidates: Int,
+      pos_analysis_depth: Int,
+      pos_analysis_seconds: Int,
+      pos_analysis_sequences: Int,
       request: cask.Request
   ) = {
     val userEmail = getSessionUserEmail(request)
@@ -121,7 +140,11 @@ object ConfigRoutes extends BaseRoutes {
         shallowLimit = shallow_limit,
         deepLimit = deep_limit,
         winChanceDropThreshold = win_chance_threshold,
-        isConfigured = true
+        isConfigured = true,
+        posAnalysisCandidates = pos_analysis_candidates,
+        posAnalysisDepth = pos_analysis_depth,
+        posAnalysisSeconds = pos_analysis_seconds,
+        posAnalysisSequences = pos_analysis_sequences
       )
 
       Await.result(SettingsRepository.saveAppSettings(targetUser, settings), 5.seconds)
@@ -130,7 +153,7 @@ object ConfigRoutes extends BaseRoutes {
         "",
         statusCode = 302,
         headers = Seq(
-          "Location" -> "/my-games",
+          "Location" -> "/database",
           "Set-Cookie" -> s"lang=$validLang; Path=/; SameSite=Strict"
         ) ++ noCacheHeaders
       )

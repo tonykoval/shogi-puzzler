@@ -11,7 +11,7 @@ object PuzzleRepository {
 
   // --- Primary collection methods (formerly CustomPuzzleRepository) ---
 
-  def savePuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None, blunderAnalyses: Option[String] = None, prelude: Option[String] = None, rootSfen: Option[String] = None, playPrelude: Option[Boolean] = None): Future[InsertOneResult] = {
+  def savePuzzle(name: String, sfen: String, userEmail: String, isPublic: Boolean = false, comments: Option[String] = None, selectedSequence: Option[Seq[String]] = None, moveComments: Option[Map[String, String]] = None, analysisData: Option[String] = None, selectedCandidates: Option[Seq[Int]] = None, gameKifHash: Option[String] = None, blunderMoves: Option[Seq[String]] = None, status: String = "accepted", tags: Option[Seq[String]] = None, moveNumber: Option[Int] = None, blunderAnalyses: Option[String] = None, prelude: Option[String] = None, rootSfen: Option[String] = None, playPrelude: Option[Boolean] = None, source: String = "custom"): Future[InsertOneResult] = {
     import org.mongodb.scala.bson.BsonString
     import org.mongodb.scala.bson.collection.immutable.Document
 
@@ -23,6 +23,7 @@ object PuzzleRepository {
       "user_email" -> userEmail,
       "is_public" -> isPublic,
       "status" -> status,
+      "source" -> source,
       "comments" -> comments.getOrElse(""),
       "selected_sequence" -> selectedSequence.getOrElse(Seq.empty),
       "move_comments" -> moveCommentsDoc,
@@ -43,6 +44,44 @@ object PuzzleRepository {
       case None => baseDoc
     }
     puzzlesCollection.insertOne(doc).toFuture()
+  }
+
+  /** Backward-compatible filter: puzzles with `source == s`, plus legacy docs without a source field. */
+  private def sourceFilter(userEmail: String, source: String): org.bson.conversions.Bson = {
+    import org.mongodb.scala.model.{Filters => F}
+    val legacyMatch = source match {
+      case "game" =>
+        // Old docs with game_kif_hash set but no source field
+        F.and(
+          F.or(F.exists("source", false), F.equal("source", "")),
+          F.exists("game_kif_hash", true),
+          F.not(F.equal("game_kif_hash", ""))
+        )
+      case "custom" =>
+        // Old docs with no source field and no game_kif_hash
+        F.and(
+          F.or(F.exists("source", false), F.equal("source", "")),
+          F.or(F.exists("game_kif_hash", false), F.equal("game_kif_hash", ""))
+        )
+      case _ => F.eq("source", "__nomatch__") // no legacy for other sources
+    }
+    F.and(
+      F.equal("user_email", userEmail),
+      F.or(F.equal("source", source), legacyMatch)
+    )
+  }
+
+  def getPuzzlesBySource(userEmail: String, source: String): Future[Seq[Document]] =
+    puzzlesCollection
+      .find(sourceFilter(userEmail, source))
+      .sort(org.mongodb.scala.model.Sorts.descending("created_at"))
+      .toFuture()
+
+  def countReviewBySource(userEmail: String, source: String): Future[Long] = {
+    import org.mongodb.scala.model.{Filters => F}
+    puzzlesCollection.countDocuments(
+      F.and(sourceFilter(userEmail, source), F.equal("status", "review"))
+    ).toFuture()
   }
 
   def getUserPuzzles(userEmail: String): Future[Seq[Document]] = {
@@ -239,6 +278,24 @@ object PuzzleRepository {
     for {
       primaryCount <- puzzlesCollection.countDocuments(org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash)).toFuture()
       legacyCount <- legacyPuzzlesCollection.countDocuments(org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash)).toFuture()
+    } yield primaryCount + legacyCount
+  }
+
+  def countTotalPuzzles(): Future[Long] =
+    puzzlesCollection.countDocuments().toFuture()
+
+  def countTotalPublicPuzzles(): Future[Long] =
+    puzzlesCollection.countDocuments(Filters.equal("is_public", true)).toFuture()
+
+  def countPublicPuzzlesForGame(gameKifHash: String): Future[Long] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    val filter = org.mongodb.scala.model.Filters.and(
+      org.mongodb.scala.model.Filters.equal("game_kif_hash", gameKifHash),
+      org.mongodb.scala.model.Filters.equal("is_public", true)
+    )
+    for {
+      primaryCount <- puzzlesCollection.countDocuments(filter).toFuture()
+      legacyCount  <- legacyPuzzlesCollection.countDocuments(filter).toFuture()
     } yield primaryCount + legacyCount
   }
 

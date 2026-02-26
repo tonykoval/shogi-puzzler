@@ -85,6 +85,72 @@ object Components {
     )
   }
 
+  /**
+   * Games summary card for the fetch-games page.
+   * Source radio buttons switch the nickname field to the configured value for that platform.
+   */
+  def gamesSummaryCard(
+    lishogiNickname: String,
+    shogiwarsNickname: String,
+    dojo81Nickname: String,
+    defaultSource: String = "lishogi",
+    defaultLimit: Int = 10,
+    isLoggedIn: Boolean = false
+  )(implicit lang: String = I18n.defaultLang) = {
+    val placeholders = Set("lishogi_user", "swars_user", "dojo81_user")
+    val rawNick = defaultSource match {
+      case "shogiwars" => shogiwarsNickname
+      case "dojo81"    => dojo81Nickname
+      case _           => lishogiNickname
+    }
+    val displayNickname = if (placeholders(rawNick)) "" else rawNick
+
+    div(cls := "card bg-dark text-light border-secondary mb-4")(
+      div(cls := "card-body")(
+        // Hidden nickname values for JS source switching
+        input(`type` := "hidden", id := "lishogiNickname", value := lishogiNickname),
+        input(`type` := "hidden", id := "shogiwarsNickname", value := shogiwarsNickname),
+        input(`type` := "hidden", id := "dojo81Nickname", value := dojo81Nickname),
+        // Row 1: source selector + limit
+        div(cls := "d-flex flex-wrap align-items-end gap-3 mb-3")(
+          div()(
+            label(cls := "form-label text-secondary small mb-1")(I18n.t("games.selectSource")),
+            div(cls := "btn-group", role := "group", attr("aria-label") := "Source selection")(
+              input(`type` := "radio", id := "sourceLishogi", name := "sourceGroup", value := "lishogi", cls := "btn-check",
+                if (defaultSource == "lishogi") checked := true else ()),
+              label(cls := "btn btn-outline-secondary", `for` := "sourceLishogi")(I18n.t("games.sourceLishogi")),
+              input(`type` := "radio", id := "sourceShogiwars", name := "sourceGroup", value := "shogiwars", cls := "btn-check",
+                if (defaultSource == "shogiwars") checked := true else ()),
+              label(cls := "btn btn-outline-secondary", `for` := "sourceShogiwars")(I18n.t("games.sourceShogiwars")),
+              if (isLoggedIn) input(`type` := "radio", id := "sourceDojo81", name := "sourceGroup", value := "dojo81", cls := "btn-check",
+                if (defaultSource == "dojo81") checked := true else ()) else (),
+              if (isLoggedIn) label(cls := "btn btn-outline-secondary", `for` := "sourceDojo81")(I18n.t("games.sourceDojo81")) else ()
+            )
+          ),
+          div(style := "width: 120px")(
+            label(cls := "form-label text-secondary small mb-1", `for` := "gamesLimit")(I18n.t("games.limitLabel")),
+            input(`type` := "number", id := "gamesLimit", cls := "form-control bg-dark text-light border-secondary",
+              value := defaultLimit.toString, min := "1", max := "100")
+          )
+        ),
+        // Row 2: nickname input + fetch button aligned at bottom
+        div(cls := "d-flex flex-wrap align-items-end gap-3 mb-3")(
+          div(cls := "flex-grow-1")(
+            label(cls := "form-label", `for` := "gamesNickname")(I18n.t("games.nicknameLabel")),
+            input(`type` := "text", id := "gamesNickname", cls := "form-control bg-dark text-light border-secondary",
+              value := displayNickname, placeholder := I18n.t("games.nicknamePlaceholder"))
+          ),
+          button(id := "fetchGamesBtn", cls := "btn btn-primary")(
+            i(cls := "bi bi-cloud-download me-2"),
+            I18n.t("games.fetchButton")
+          )
+        ),
+        // Results container (populated by JS)
+        div(id := "games-results")()
+      )
+    )
+  }
+
   def configField(labelName: String, fieldName: String, valueStr: String, inputType: String = "text", stepValue: Option[String] = None) = {
     div(cls := "mb-3")(
       label(cls := "form-label")(labelName),
@@ -125,7 +191,10 @@ object Components {
                 ),
                 ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-practice")(
                   if (canAccess("my-games")) {
-                    li(a(cls := "dropdown-item", href := "/my-games")(i(cls := "bi bi-controller me-2"), I18n.t("nav.myGames")))
+                    li(a(cls := "dropdown-item", href := "/fetch-games")(i(cls := "bi bi-download me-2"), I18n.t("games.pageTitle")))
+                  } else (),
+                  if (canAccess("my-games")) {
+                    li(a(cls := "dropdown-item", href := "/database")(i(cls := "bi bi-database me-2"), I18n.t("database.pageTitle")))
                   } else (),
                   if (canAccess("training")) {
                     li(a(cls := "dropdown-item", href := "/training")(i(cls := "bi bi-mortarboard me-2"), I18n.t("nav.training")))
@@ -143,7 +212,7 @@ object Components {
                 ),
                 ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-puzzles")(
                   li(a(cls := "dropdown-item", href := "/viewer")(i(cls := "bi bi-puzzle me-2"), I18n.t("nav.puzzles"))),
-                  li(a(cls := "dropdown-item", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.repertoires")))
+                  li(a(cls := "dropdown-item", href := "/study-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.studies")))
                 )
               ),
               // Editor Dropdown
@@ -157,7 +226,7 @@ object Components {
                 ),
                 ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-editor")(
                   if (canAccess("repertoire")) {
-                    li(a(cls := "dropdown-item", href := "/repertoire")(i(cls := "bi bi-book me-2"), I18n.t("nav.repEditor")))
+                    li(a(cls := "dropdown-item", href := "/study")(i(cls := "bi bi-book me-2"), I18n.t("nav.studyEditor")))
                   } else (),
                   if (canAccess("puzzle-creator")) {
                     li(a(cls := "dropdown-item", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-2"), I18n.t("nav.puzzleEditor")))
@@ -191,23 +260,20 @@ object Components {
               )
             )
           } else {
-            // Minimal navigation for unauthenticated users
+            // Flat navigation for unauthenticated users (no dropdowns)
             ul(cls := "navbar-nav me-auto")(
-              // Puzzles - public access
-              li(cls := "nav-item dropdown")(
-                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
-                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
-                  attr("aria-haspopup") := "true", id := "dropdown-puzzles")(
-                  i(cls := "bi bi-puzzle me-1"),
-                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"),
-                  scalatags.Text.all.span(cls := "d-lg-none")("Puzzles")
-                ),
-                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-puzzles")(
-                  li(a(cls := "dropdown-item", href := "/viewer")(i(cls := "bi bi-puzzle me-2"), I18n.t("nav.puzzles"))),
-                  li(a(cls := "dropdown-item", href := "/repertoire-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.repertoires")))
-                )
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/fetch-games")(i(cls := "bi bi-cloud-download me-1"), I18n.t("games.pageTitle"))
               ),
-              // About - public access
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/database")(i(cls := "bi bi-database me-1"), I18n.t("database.pageTitle"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/study-viewer")(i(cls := "bi bi-book-half me-1"), I18n.t("nav.studies"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-puzzle me-1"), I18n.t("nav.puzzles"))
+              ),
               li(cls := "nav-item")(
                 a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
               )

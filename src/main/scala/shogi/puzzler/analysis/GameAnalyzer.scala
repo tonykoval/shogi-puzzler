@@ -34,9 +34,6 @@ class GameAnalyzer(engineManager: EngineManager) {
    * @return Analysis result for each position
    */
   def analyzeShallow(game: ParsedGame, secondsPerMove: Int = 1, onProgress: String => Unit = _ => ()): Seq[AnalysisResult] = {
-    logger.info(s"[ANALYZER] Starting shallow analysis of ${game.allPositions.size} positions")
-    logger.info(s"[ANALYZER] Time per move: ${secondsPerMove}s")
-
     val allResults = game.allPositions.zipWithIndex.map { case ((moveHistory, positionSfen), positionIndex) =>
       onProgress(s"Analyzing move ${positionIndex + 1}/${game.allPositions.size}...")
       val rawEngineResults = engineManager.analyze(
@@ -52,20 +49,12 @@ class GameAnalyzer(engineManager: EngineManager) {
         parseEngineResult(rawData, positionSfen, moveHistory, positionIndex + 1)
       )
 
-      if (parsedResults.nonEmpty) {
-        val displayScore = parsedResults.last.evaluationScore.forPlayer(Color.Sente)
-        logger.info(s"[ANALYZER] Analyzing position ${positionIndex + 1}/${game.allPositions.size} " +
-          s"Score: $displayScore")
-      }
-
       // Return the last (and only) result since multiPV=1 in shallow analysis
       parsedResults.lastOption.getOrElse {
          // Fallback if engine fails to return anything
          parseEngineResult(Map.empty, positionSfen, moveHistory, positionIndex + 1)
       }
     }
-
-    logger.info(s"[ANALYZER] Shallow analysis complete. Processed ${allResults.size} positions.")
     allResults
   }
 
@@ -80,8 +69,6 @@ class GameAnalyzer(engineManager: EngineManager) {
    * @return Top 3 moves with evaluations
    */
   def analyzeDeep(sfenPosition: String, moveHistory: Vector[Usi], moveNumber: Int, analysisSeconds: Int = 10): Seq[AnalysisResult] = {
-    logger.info(s"[ANALYZER] Starting deep analysis (${analysisSeconds}s, MultiPV=3)")
-
     val rawEngineResults = engineManager.analyze(
       sfenPosition,
       Limit(time = Some(analysisSeconds)),
@@ -91,11 +78,6 @@ class GameAnalyzer(engineManager: EngineManager) {
     val parsedResults = rawEngineResults.map(rawData =>
       parseEngineResult(rawData, Sfen(sfenPosition), moveHistory, moveNumber)
     )
-
-    logger.info(s"[ANALYZER] Deep analysis found ${parsedResults.size} lines")
-    parsedResults.foreach { result =>
-      logger.info(s"[ANALYZER]   Line: ${result.principalVariation.getOrElse("N/A")} - Score: ${result.evaluationScore}")
-    }
 
     parsedResults
   }

@@ -13,16 +13,13 @@ object RootRoutes extends BaseRoutes {
   @cask.get("/")
   def index(lang: Option[String] = None, request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      logger.info(s"Root accessed, redirecting to /viewer. Cookies: ${request.cookies.keys.mkString(", ")}")
-      val target = lang.map(l => s"/viewer?lang=${java.net.URLEncoder.encode(l, "UTF-8")}").getOrElse("/viewer")
-      noCacheRedirect(target)
+      noCacheRedirect("/database")
     }
   }
 
   @cask.get("/my-games-fallback", subpath = true)
   def catchAll(request: cask.Request): cask.Response[String] = {
     val path = request.remainingPathSegments.mkString("/")
-    logger.info(s"Catch-all route: path=$path params=${request.queryParams}")
     cask.Response(s"Not Found: $path", statusCode = 404)
   }
 

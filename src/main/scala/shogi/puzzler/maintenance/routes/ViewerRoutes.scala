@@ -99,17 +99,12 @@ object ViewerRoutes extends BaseRoutes {
                   )
                 ),
                 div(cls := "row g-2 align-items-center")(
-                  div(cls := "col-4")(
+                  div(cls := "col-6")(
                     button(cls := "btn btn-secondary random w-100", title := I18n.t("viewer.random")) (
                       i(cls := "bi bi-shuffle me-1"), tag("span")(cls := "d-none d-lg-inline")(I18n.t("viewer.random"))
                     )
                   ),
-                  div(cls := "col-4")(
-                    button(cls := "btn btn-info lishogi-game w-100", title := I18n.t("viewer.game")) (
-                      i(cls := "bi bi-box-arrow-up-right me-1"), tag("span")(cls := "d-none d-lg-inline")(I18n.t("viewer.game"))
-                    )
-                  ),
-                  div(cls := "col-4")(
+                  div(cls := "col-6")(
                     button(cls := "btn btn-outline-info lishogi-position w-100", title := I18n.t("viewer.position")) (
                       i(cls := "bi bi-search me-1"), tag("span")(cls := "d-none d-lg-inline")(I18n.t("viewer.position"))
                     )

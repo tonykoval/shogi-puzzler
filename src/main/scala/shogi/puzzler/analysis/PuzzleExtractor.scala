@@ -43,9 +43,6 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
                deepAnalysisSeconds: Int = 10
              ): Seq[TacticalPuzzle] = {
 
-    logger.info(s"[EXTRACTOR] Starting puzzle extraction with threshold: $winChanceDropThreshold")
-    logger.info(s"[EXTRACTOR] Analyzing ${shallowAnalysisResults.size} positions")
-
     val extractedPuzzles = shallowAnalysisResults
       .sliding(2)
       .zipWithIndex
@@ -65,13 +62,9 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
               case _ => false
             }
 
-            logger.info(s"[EXTRACTOR] Position ${pairIndex + 1}: Win chance drop = ${(evaluationDrop * 100).round}%")
-
             if (evaluationDrop > winChanceDropThreshold && !isMateInZero) {
-              logger.info(s"[EXTRACTOR] Potential blunder detected! Performing deep analysis...")
               buildPuzzle(game, positionBeforeBlunder, positionAfterBlunder, winChanceDropThreshold, deepAnalysisSeconds)
             } else {
-              if (isMateInZero) logger.info(s"[EXTRACTOR]   Skipping: Terminal mate position")
               None
             }
 
@@ -80,7 +73,6 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       }
       .toSeq
 
-    logger.info(s"[EXTRACTOR] Extraction complete. Found ${extractedPuzzles.size} puzzles")
     extractedPuzzles
   }
 
@@ -114,9 +106,7 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       positionAfter.evaluationScore.forPlayer(playerColor)
     )
 
-    val delta = winChanceBefore - winChanceAfter
-    logger.info(s"[EXTRACTOR]   Win chances: ${(winChanceBefore * 100).round}% → ${(winChanceAfter * 100).round}% (Δ${(delta * 100).round}%)")
-    delta
+    winChanceBefore - winChanceAfter
   }
 
   /**
@@ -138,7 +128,6 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
                          ): Option[TacticalPuzzle] = {
 
     val moveNumber = positionBeforeBlunder.moveNumber
-    logger.info(s"[EXTRACTOR] Deep analyzing move $moveNumber to verify puzzle quality")
 
     // Find what the best move(s) should have been
     val deepAnalysisLines = gameAnalyzer.analyzeDeep(
@@ -157,15 +146,10 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       game.playerColorInGame
     )
 
-    logger.info(s"[EXTRACTOR]   Best move improvement: ${(improvementFromBestMove * 100).round}%")
-
-    if (improvementFromBestMove > qualityThreshold) {
-      logger.info(s"[EXTRACTOR]   ✓ Puzzle quality sufficient, creating puzzle")
+    if (improvementFromBestMove > qualityThreshold)
       Some(createPuzzle(game, positionBeforeBlunder, positionAfterBlunder, deepAnalysisLines, moveNumber))
-    } else {
-      logger.info(s"[EXTRACTOR]   ✗ Puzzle quality insufficient (below ${(qualityThreshold * 100).round}% threshold)")
+    else
       None
-    }
   }
 
   /**
@@ -223,8 +207,6 @@ class PuzzleExtractor(gameAnalyzer: GameAnalyzer) {
       secondBestMove,
       thirdBestMove
     )
-
-    logger.info(s"[EXTRACTOR] Created puzzle ID: ${game.gameIdentifier}#${positionBeforeBlunder.positionSfen.boardString.getOrElse("unknown")}")
 
     val opponentLastMove = positionBeforeBlunder.moveHistoryToPosition.lastOption
     val playerBlunderMove = positionAfterBlunder.moveHistoryToPosition.lastOption

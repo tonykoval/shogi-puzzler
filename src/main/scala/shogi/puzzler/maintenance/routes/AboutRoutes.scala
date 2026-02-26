@@ -30,10 +30,12 @@ object AboutRoutes extends BaseRoutes {
   def renderAboutPage(userEmail: Option[String], settings: AppSettings)(implicit lang: String = I18n.defaultLang) = {
     // (icon, titleKey, descKey, borderClass, isPublic)
     val features = Seq(
-      ("bi-cloud-download",  "about.fetching",     "about.fetchingDesc",     "border-info",      false),
-      ("bi-cpu",             "about.analysis",     "about.analysisDesc",     "border-warning",   false),
+      ("bi-database",        "about.database",     "about.databaseDesc",     "border-info",      true),
       ("bi-puzzle",          "about.puzzleViewer", "about.puzzleViewerDesc", "border-success",   true),
-      ("bi-book",            "about.repertoire",   "about.repertoireDesc",   "border-primary",   false),
+      ("bi-book-half",       "about.studyViewer",  "about.studyViewerDesc",  "border-primary",   true),
+      ("bi-book",            "about.study",        "about.studyDesc",        "border-primary",   false),
+      ("bi-cloud-download",  "about.fetching",     "about.fetchingDesc",     "border-secondary", false),
+      ("bi-cpu",             "about.analysis",     "about.analysisDesc",     "border-warning",   false),
       ("bi-mortarboard",     "about.training",     "about.trainingDesc",     "border-danger",    false),
       ("bi-plus-circle",     "about.creator",      "about.creatorDesc",      "border-secondary", false),
       ("bi-camera",          "about.ocr",          "about.ocrDesc",          "border-light",     false),
@@ -97,7 +99,7 @@ object AboutRoutes extends BaseRoutes {
       ),
       div(cls := "row g-3 mb-5")(
         features.map { case (icon, titleKey, descKey, border, isPublic) =>
-          div(cls := "col-md-6 col-lg-3")(
+          div(cls := "col-md-6 col-lg-4")(
             div(cls := s"card bg-dark text-light h-100 border-start border-3 $border", style := "border-top:none;border-right:none;border-bottom:none;")(
               div(cls := "card-body")(
                 div(cls := "d-flex justify-content-between align-items-start mb-2")(

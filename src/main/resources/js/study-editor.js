@@ -1,10 +1,10 @@
 
 let sg;
-let repertoire;
+let study;
 let currentSfen;
 let history = [];
 let moveHistory = []; // USI moves parallel to history (SFENs)
-const repertoireId = document.getElementById('repertoireId').value;
+const studyId = document.getElementById('studyId').value;
 
 let editingMove = null; // { parentSfen, usi, comment, isPuzzle }
 let engineArrowsActive = false;
@@ -69,10 +69,10 @@ function formatMoveText(usi, pos) {
 }
 
 async function loadRepertoire(lastMoveUsi) {
-    const response = await fetch(`/repertoire/${repertoireId}/json`);
-    repertoire = await response.json();
+    const response = await fetch(`/study/${studyId}/json`);
+    study = await response.json();
     if (!currentSfen) {
-        currentSfen = repertoire.rootSfen;
+        currentSfen = study.rootSfen;
     }
     renderBoard(lastMoveUsi);
     renderVariations();
@@ -86,11 +86,11 @@ function updateMenuState() {
     const advanceBtn = document.querySelector('button[onclick="advanceMove()"]');
 
     if (revertBtn) revertBtn.disabled = history.length === 0;
-    if (toRootBtn) toRootBtn.disabled = currentSfen === repertoire.rootSfen;
+    if (toRootBtn) toRootBtn.disabled = currentSfen === study.rootSfen;
 
     if (advanceBtn) {
         const nodeKey = sanitizeSfen(currentSfen);
-        const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+        const node = (study && study.nodes && study.nodes[nodeKey]) || { moves: [] };
         advanceBtn.disabled = node.moves.length !== 1;
     }
 }
@@ -208,7 +208,7 @@ async function handleMove(moveData) {
         const nextSfen = getNextSfen(usi);
         const parentSfen = currentSfen;
 
-        const response = await fetch(`/repertoire/${repertoireId}/move`, {
+        const response = await fetch(`/study/${studyId}/move`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ parentSfen, usi, nextSfen })
@@ -235,7 +235,7 @@ async function handleMove(moveData) {
 async function deleteMove(usi) {
     try {
         const parentSfen = currentSfen;
-        const response = await fetch(`/repertoire/${repertoireId}/move/delete`, {
+        const response = await fetch(`/study/${studyId}/move/delete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ parentSfen, usi })
@@ -290,7 +290,7 @@ function updateCommentDisplay() {
     if (!panel) return;
 
     // Show root comment when at root position, otherwise show last move comment
-    const comment = lastMoveComment || (currentSfen === repertoire?.rootSfen ? repertoire?.rootComment : null);
+    const comment = lastMoveComment || (currentSfen === study?.rootSfen ? study?.rootComment : null);
 
     if (comment) {
         const { text } = parseAnnotations(comment);
@@ -307,13 +307,13 @@ function updateCommentDisplay() {
 function displayMoveArrows() {
     updateCommentDisplay();
     if (engineArrowsActive || !sg) return;
-    if (!repertoire || !repertoire.nodes) {
+    if (!study || !study.nodes) {
         sg.setAutoShapes([]);
         return;
     }
 
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
 
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
     const shapes = [];
@@ -344,7 +344,7 @@ function renderVariations() {
     container.innerHTML = '';
 
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
 
     if (node.moves.length === 0) {
         container.innerHTML = '<div class="text-muted p-2">No moves here yet. Play a move on the board to add one.</div>';
@@ -691,7 +691,7 @@ async function saveMoveDetails() {
     const isPuzzle = document.getElementById('moveIsPuzzle').checked;
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
+        const response = await fetch(`/study/${studyId}/move/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -724,7 +724,7 @@ async function saveMoveComment(parentSfen, usi, isPuzzle) {
     const comment = textarea.value;
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
+        const response = await fetch(`/study/${studyId}/move/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -747,7 +747,7 @@ async function saveMoveComment(parentSfen, usi, isPuzzle) {
 
 async function saveMoveTranslation(parentSfen, usi, lang, comment) {
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/move/translate`, {
+        const response = await fetch(`/study/${studyId}/move/translate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ parentSfen, usi, lang, comment })
@@ -880,7 +880,7 @@ function displayEngineResults(moves) {
         addMoveBtn.className = 'btn btn-sm btn-outline-success p-0 px-1';
         addMoveBtn.style.lineHeight = '1';
         addMoveBtn.innerHTML = '<i class="bi bi-plus-lg"></i>';
-        addMoveBtn.title = 'Add move to repertoire';
+        addMoveBtn.title = 'Add move to study';
         addMoveBtn.onclick = () => addEngineMove(move);
         btnGroup.appendChild(addMoveBtn);
 
@@ -910,11 +910,11 @@ function clearEngineAnalysis() {
 
 async function addEngineEvalAsComment(engineMove) {
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
     const matchingMove = node.moves.find(m => m.usi === engineMove.usi);
 
     if (!matchingMove) {
-        alert('This move is not in the repertoire at this position.');
+        alert('This move is not in the study at this position.');
         return;
     }
 
@@ -932,7 +932,7 @@ async function addEngineEvalAsComment(engineMove) {
         : evalLine;
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/move/update`, {
+        const response = await fetch(`/study/${studyId}/move/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -963,7 +963,7 @@ async function addEngineMove(engineMove) {
     const comment = `Engine: ${evalText} (d${engineMove.depth})`;
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/move`, {
+        const response = await fetch(`/study/${studyId}/move`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -990,7 +990,7 @@ async function reloadFromStudy() {
     }
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/reload-from-study`, {
+        const response = await fetch(`/study/${studyId}/reload-from-study`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: '{}'
@@ -1029,13 +1029,13 @@ export function revertMove() {
 }
 
 export function toRoot() {
-    if (currentSfen !== repertoire.rootSfen) {
+    if (currentSfen !== study.rootSfen) {
         clearEngineAnalysis();
         editingCommentUsi = null;
         lastMoveComment = null;
         history = [];
         moveHistory = [];
-        currentSfen = repertoire.rootSfen;
+        currentSfen = study.rootSfen;
         renderBoard();
         renderVariations();
         updateMenuState();
@@ -1044,9 +1044,9 @@ export function toRoot() {
 }
 
 export function advanceMove() {
-    if (!repertoire || !repertoire.nodes) return;
+    if (!study || !study.nodes) return;
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes[nodeKey]) || { moves: [] };
     if (node.moves.length === 1) {
         const move = node.moves[0];
         clearEngineAnalysis();
@@ -1088,7 +1088,7 @@ async function importMoves() {
     const isPuzzle = document.getElementById('importIsPuzzle').checked;
 
     try {
-        const response = await fetch(`/repertoire/${repertoireId}/import`, {
+        const response = await fetch(`/study/${studyId}/import`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1141,7 +1141,7 @@ async function importKifFile() {
         btn.innerText = 'Importing...';
 
         try {
-            const response = await fetch(`/repertoire/${repertoireId}/import-kif`, {
+            const response = await fetch(`/study/${studyId}/import-kif`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ kif })
@@ -1188,13 +1188,13 @@ window.importKifFile = importKifFile;
 
 function reviewInPuzzleCreator() {
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
     const puzzleMove = node.moves.find(m => m.isPuzzle);
 
     const params = new URLSearchParams();
     params.set('sfen', currentSfen);
     if (moveHistory.length) params.set('prelude', moveHistory.join(' '));
-    if (repertoire.rootSfen) params.set('rootSfen', repertoire.rootSfen);
+    if (study.rootSfen) params.set('rootSfen', study.rootSfen);
     if (puzzleMove) {
         params.set('blunder', puzzleMove.usi);
         if (puzzleMove.comment) {
@@ -1212,19 +1212,20 @@ window.reviewInPuzzleCreator = reviewInPuzzleCreator;
 
 async function saveDraftPuzzle() {
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
     const puzzleMove = node.moves.find(m => m.isPuzzle);
 
     const data = {
-        name: puzzleMove && puzzleMove.comment ? puzzleMove.comment : `Draft from ${repertoire.name}`,
+        name: puzzleMove && puzzleMove.comment ? puzzleMove.comment : `Draft from ${study.name}`,
         sfen: currentSfen,
         status: 'review',
+        source: 'study',
         blunderMoves: puzzleMove ? [puzzleMove.usi] : [],
         comments: '',
         isPublic: false,
         tags: [],
         prelude: moveHistory.length ? moveHistory.join(' ') : '',
-        rootSfen: repertoire.rootSfen || '',
+        rootSfen: study.rootSfen || '',
     };
 
     try {
@@ -1258,7 +1259,7 @@ function sendToPuzzleCreator(parentSfen, move) {
     params.set('blunder', move.usi);
     if (move.comment) params.set('comment', move.comment);
     if (moveHistory.length) params.set('prelude', moveHistory.join(' '));
-    if (repertoire.rootSfen) params.set('rootSfen', repertoire.rootSfen);
+    if (study.rootSfen) params.set('rootSfen', study.rootSfen);
     window.open(`/puzzle-creator/new?${params.toString()}`, '_blank');
     clearAndAdvancePuzzle(parentSfen, move);
 }
@@ -1266,7 +1267,7 @@ function sendToPuzzleCreator(parentSfen, move) {
 async function clearAndAdvancePuzzle(parentSfen, move) {
     try {
         // Clear isPuzzle flag on this move
-        await fetch(`/repertoire/${repertoireId}/move/update`, {
+        await fetch(`/study/${studyId}/move/update`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1277,9 +1278,9 @@ async function clearAndAdvancePuzzle(parentSfen, move) {
             })
         });
 
-        // Reload repertoire data
-        const response = await fetch(`/repertoire/${repertoireId}/json`);
-        repertoire = await response.json();
+        // Reload study data
+        const response = await fetch(`/study/${studyId}/json`);
+        study = await response.json();
 
         clearEngineAnalysis();
         editingCommentUsi = null;
@@ -1308,10 +1309,10 @@ async function clearAndAdvancePuzzle(parentSfen, move) {
 }
 
 function findNextPuzzleMove() {
-    if (!repertoire || !repertoire.nodes) return null;
+    if (!study || !study.nodes) return null;
 
-    // DFS through repertoire nodes starting from root
-    const rootSfen = repertoire.rootSfen;
+    // DFS through study nodes starting from root
+    const rootSfen = study.rootSfen;
     const visited = new Set();
 
     function dfs(sfen, path) {
@@ -1319,7 +1320,7 @@ function findNextPuzzleMove() {
         if (visited.has(nodeKey)) return null;
         visited.add(nodeKey);
 
-        const node = repertoire.nodes[nodeKey];
+        const node = study.nodes[nodeKey];
         if (!node || !node.moves) return null;
 
         for (const move of node.moves) {

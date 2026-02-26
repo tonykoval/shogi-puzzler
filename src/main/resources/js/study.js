@@ -1,11 +1,11 @@
-export function createRepertoire() {
-    const name = document.getElementById('repertoireName').value;
+export function createStudy() {
+    const name = document.getElementById('studyName').value;
     const isAutoReload = document.getElementById('isAutoReload').checked;
     const reloadThreshold = parseInt(document.getElementById('reloadThreshold').value) || 200;
     const reloadColor = document.getElementById('reloadColor').value;
     if (!name) return;
 
-    fetch('/repertoire/create', {
+    fetch('/study/create', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -30,14 +30,14 @@ export function createRepertoire() {
     })
     .catch((error) => {
         console.error('Error:', error);
-        alert('Failed to create repertoire: ' + error.message);
+        alert('Failed to create study: ' + error.message);
     });
 }
 
-export function deleteRepertoire(id) {
-    if (!confirm('Are you sure you want to delete this repertoire?')) return;
+export function deleteStudy(id) {
+    if (!confirm('Are you sure you want to delete this study?')) return;
 
-    fetch('/repertoire/delete', {
+    fetch('/study/delete', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -52,15 +52,15 @@ export function deleteRepertoire(id) {
     });
 }
 
-export function reloadRepertoire(id) {
-    if (!confirm('This will clear current repertoire and rebuild it from all analyzed games. Continue?')) return;
+export function reloadStudy(id) {
+    if (!confirm('This will clear current study and rebuild it from all analyzed games. Continue?')) return;
 
     const btn = event.target;
     const originalText = btn.innerText;
     btn.disabled = true;
     btn.innerText = 'Reloading...';
 
-    fetch('/repertoire/reload', {
+    fetch('/study/reload', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -76,7 +76,7 @@ export function reloadRepertoire(id) {
         return response.json();
     })
     .then(data => {
-        alert('Repertoire reloaded! Processed ' + data.processedGames + ' games.');
+        alert('Study reloaded! Processed ' + data.processedGames + ' games.');
         window.location.reload();
     })
     .catch((error) => {
@@ -87,8 +87,8 @@ export function reloadRepertoire(id) {
     });
 }
 
-export function toggleRepertoirePublic(id, isPublic) {
-    fetch('/repertoire/toggle-public', {
+export function toggleStudyPublic(id, isPublic) {
+    fetch('/study/toggle-public', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -112,9 +112,9 @@ export function toggleRepertoirePublic(id, isPublic) {
     });
 }
 
-export function importKifRepertoire() {
+export function importKifStudy() {
     const fileInput = document.getElementById('kifFile');
-    const nameInput = document.getElementById('kifRepertoireName');
+    const nameInput = document.getElementById('kifStudyName');
 
     if (!fileInput.files || !fileInput.files[0]) {
         alert('Please select a KIF file.');
@@ -125,7 +125,7 @@ export function importKifRepertoire() {
     const name = nameInput.value || file.name.replace(/\.(kif|kifu)$/i, '');
 
     if (!name) {
-        alert('Please enter a name for the repertoire.');
+        alert('Please enter a name for the study.');
         return;
     }
 
@@ -135,7 +135,7 @@ export function importKifRepertoire() {
         btn.disabled = true;
         btn.innerText = 'Importing...';
 
-        fetch('/repertoire/create-from-kif', {
+        fetch('/study/create-from-kif', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, kif })
@@ -145,7 +145,7 @@ export function importKifRepertoire() {
             return data;
         }))
         .then(data => {
-            alert(`Repertoire created with ${data.moveCount} moves.`);
+            alert(`Study created with ${data.moveCount} moves.`);
             window.location.reload();
         })
         .catch(error => {
@@ -192,7 +192,7 @@ export async function importLishogiStudy() {
 
     try {
         // Phase 1: Prepare - fetch and split chapters server-side
-        const prepResponse = await fetch('/repertoire/prepare-lishogi-study', {
+        const prepResponse = await fetch('/study/prepare-lishogi-study', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url })
@@ -205,7 +205,7 @@ export async function importLishogiStudy() {
         // For single-chapter studies, use the original single-request endpoint
         if (chapters.length <= 1) {
             btn.innerText = 'Importing...';
-            const response = await fetch('/repertoire/create-from-lishogi-study', {
+            const response = await fetch('/study/create-from-lishogi-study', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ url })
@@ -215,7 +215,7 @@ export async function importLishogiStudy() {
 
             const count = data.chapters.length;
             const summary = data.chapters.map(c => `${c.name} (${c.moveCount} moves)`).join(', ');
-            alert(`Imported ${count} repertoire(s): ${summary}`);
+            alert(`Imported ${count} study(s): ${summary}`);
             window.location.reload();
             return;
         }
@@ -234,7 +234,7 @@ export async function importLishogiStudy() {
             progressBar.style.width = `${((i) / total) * 100}%`;
 
             try {
-                const chResponse = await fetch('/repertoire/import-lishogi-chapter', {
+                const chResponse = await fetch('/study/import-lishogi-chapter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ key, index: chapter.index })
@@ -266,7 +266,7 @@ export async function importLishogiStudy() {
             progressStatus.textContent = `Done! Imported ${results.length} chapters.`;
             progressBar.style.width = '100%';
             const summary = results.map(c => `${c.name} (${c.moveCount} moves)`).join(', ');
-            alert(`Imported ${results.length} repertoire(s): ${summary}`);
+            alert(`Imported ${results.length} study(s): ${summary}`);
             window.location.reload();
         }
     } catch (error) {
@@ -290,7 +290,7 @@ export async function reloadStudyGroup(ids) {
     const results = [];
     for (const id of idList) {
         try {
-            const response = await fetch(`/repertoire/${id}/reload-from-study`, {
+            const response = await fetch(`/study/${id}/reload-from-study`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: '{}'
@@ -313,15 +313,15 @@ export async function reloadStudyGroup(ids) {
 
 let activeSourceFilter = 'all';
 
-export function filterRepertoires() {
-    const searchText = (document.getElementById('repertoireSearch')?.value || '').toLowerCase();
+export function filterStudies() {
+    const searchText = (document.getElementById('studySearch')?.value || '').toLowerCase();
     const filter = activeSourceFilter;
 
     // Filter study groups
-    document.querySelectorAll('.repertoire-group').forEach(group => {
+    document.querySelectorAll('.study-group').forEach(group => {
         const source = group.dataset.source || '';
         const sourceMatch = filter === 'all' || source === filter;
-        const items = group.querySelectorAll('.repertoire-item');
+        const items = group.querySelectorAll('.study-item');
         let anyVisible = false;
 
         items.forEach(item => {
@@ -336,7 +336,7 @@ export function filterRepertoires() {
     });
 
     // Filter standalone items
-    document.querySelectorAll('#repertoire-list > .row .repertoire-item').forEach(item => {
+    document.querySelectorAll('#study-list > .row .study-item').forEach(item => {
         const source = item.dataset.source || 'manual';
         const name = item.dataset.name || '';
         const sourceMatch = filter === 'all' || source === filter;
@@ -349,7 +349,7 @@ export function setSourceFilter(btn) {
     document.querySelectorAll('[data-filter]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     activeSourceFilter = btn.dataset.filter;
-    filterRepertoires();
+    filterStudies();
 }
 
 export function deleteStudyGroup(ids) {
@@ -357,7 +357,7 @@ export function deleteStudyGroup(ids) {
     if (!confirm(`Delete all ${idList.length} chapters in this study?`)) return;
 
     Promise.all(idList.map(id =>
-        fetch('/repertoire/delete', {
+        fetch('/study/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ id })
@@ -371,13 +371,13 @@ export function deleteStudyGroup(ids) {
 }
 
 // Expose to global scope for onclick handlers
-window.createRepertoire = createRepertoire;
-window.deleteRepertoire = deleteRepertoire;
-window.reloadRepertoire = reloadRepertoire;
-window.toggleRepertoirePublic = toggleRepertoirePublic;
-window.importKifRepertoire = importKifRepertoire;
+window.createStudy = createStudy;
+window.deleteStudy = deleteStudy;
+window.reloadStudy = reloadStudy;
+window.toggleStudyPublic = toggleStudyPublic;
+window.importKifStudy = importKifStudy;
 window.importLishogiStudy = importLishogiStudy;
-window.filterRepertoires = filterRepertoires;
+window.filterStudies = filterStudies;
 window.setSourceFilter = setSourceFilter;
 window.deleteStudyGroup = deleteStudyGroup;
 window.reloadStudyGroup = reloadStudyGroup;
@@ -395,7 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const kifFile = document.getElementById('kifFile');
     if (kifFile) {
         kifFile.addEventListener('change', () => {
-            const nameInput = document.getElementById('kifRepertoireName');
+            const nameInput = document.getElementById('kifStudyName');
             if (nameInput && !nameInput.value && kifFile.files[0]) {
                 nameInput.value = kifFile.files[0].name.replace(/\.(kif|kifu)$/i, '');
             }

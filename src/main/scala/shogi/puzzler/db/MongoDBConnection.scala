@@ -15,7 +15,7 @@ object MongoDBConnection {
   val legacyPuzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
   val puzzlesCollection: MongoCollection[Document] = database.getCollection("custom_puzzles")
   val settingsCollection: MongoCollection[Document] = database.getCollection("settings")
-  val repertoireCollection: MongoCollection[Document] = database.getCollection("repertoire")
+  val studyCollection: MongoCollection[Document] = database.getCollection("repertoire")
   val trainingPiecesCollection: MongoCollection[Document] = database.getCollection("training_pieces")
   val trainingHandsCollection: MongoCollection[Document] = database.getCollection("training_hands")
   val ocrHistoryCollection: MongoCollection[Document] = database.getCollection("ocr_history")
@@ -24,7 +24,7 @@ object MongoDBConnection {
   val srsAttemptsCollection: MongoCollection[Document] = database.getCollection("srs_attempts")
 
   println(s"[DB] Initializing connection to database: ${config.getString("database")}")
-  
+
   ping().recover {
     case e: Exception =>
       println(s"[DB] CRITICAL: Failed to connect to MongoDB: ${e.getMessage}")
@@ -54,8 +54,8 @@ object MongoDBConnection {
     org.mongodb.scala.model.IndexOptions().unique(true)
   ).toFuture().foreach(_ => println("[DB] Unique index on image_data for training_hands created"))(scala.concurrent.ExecutionContext.global)
 
-  // Index on is_public for repertoire collection
-  repertoireCollection.createIndex(
+  // Index on is_public for study (repertoire) collection
+  studyCollection.createIndex(
     org.mongodb.scala.model.Indexes.ascending("is_public")
   ).toFuture().foreach(_ => println("[DB] Index on is_public for repertoire created"))(scala.concurrent.ExecutionContext.global)
 

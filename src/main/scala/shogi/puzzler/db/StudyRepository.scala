@@ -12,28 +12,28 @@ import org.bson.types.ObjectId
 import scala.jdk.CollectionConverters._
 import org.slf4j.LoggerFactory
 
-object RepertoireRepository {
+object StudyRepository {
   private val logger = LoggerFactory.getLogger(getClass)
-  private val collection = MongoDBConnection.repertoireCollection
+  private val collection = MongoDBConnection.studyCollection
 
   private def sanitizeNodeKey(sfen: String): String =
     sfen.replace(".", "_").replace("/", "-").replace(" ", "_")
 
-  def getRepertoires(ownerEmail: Option[String]): Future[Seq[Document]] = {
+  def getStudies(ownerEmail: Option[String]): Future[Seq[Document]] = {
     val filter = ownerEmail match {
       case Some(email) => equal("ownerEmail", email)
       case None => or(equal("ownerEmail", null), equal("ownerEmail", ""), exists("ownerEmail", false))
     }
-    logger.debug(s"Fetching repertoires for ownerEmail: $ownerEmail")
+    logger.debug(s"Fetching studies for ownerEmail: $ownerEmail")
     collection.find(filter).projection(exclude("nodes")).toFuture()
   }
 
-  def getRepertoire(id: String): Future[Option[Document]] = {
+  def getStudy(id: String): Future[Option[Document]] = {
     collection.find(equal("_id", new ObjectId(id))).headOption()
   }
 
-  def createRepertoire(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None, rootSfen: Option[String] = None, rootComment: Option[String] = None, sourceUrl: Option[String] = None, sourceAuthor: Option[String] = None, studyUrl: Option[String] = None, studyName: Option[String] = None): Future[String] = {
-    logger.info(s"Creating repertoire: name=$name, ownerEmail=$ownerEmail, isAutoReload=$isAutoReload, reloadThreshold=$reloadThreshold, reloadColor=$reloadColor")
+  def createStudy(name: String, ownerEmail: Option[String], isAutoReload: Boolean = false, reloadThreshold: Int = 200, reloadColor: Option[String] = None, rootSfen: Option[String] = None, rootComment: Option[String] = None, sourceUrl: Option[String] = None, sourceAuthor: Option[String] = None, studyUrl: Option[String] = None, studyName: Option[String] = None): Future[String] = {
+    logger.info(s"Creating study: name=$name, ownerEmail=$ownerEmail, isAutoReload=$isAutoReload, reloadThreshold=$reloadThreshold, reloadColor=$reloadColor")
     val sfen = rootSfen.getOrElse(
       scala.util.Try(shogi.variant.Standard.initialSfen.value).getOrElse("lnsgkgsnl/1r5b1/ppppppppp/9/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1")
     )
@@ -50,25 +50,25 @@ object RepertoireRepository {
       sourceAuthor.map(a => Document("sourceAuthor" -> a)).getOrElse(Document()) ++
       studyUrl.map(u => Document("studyUrl" -> u)).getOrElse(Document()) ++
       studyName.map(n => Document("studyName" -> n)).getOrElse(Document())
-    collection.insertOne(doc).toFuture().map { res => 
+    collection.insertOne(doc).toFuture().map { res =>
       val id = res.getInsertedId.asObjectId().getValue.toString
-      logger.info(s"Inserted repertoire with id: $id")
+      logger.info(s"Inserted study with id: $id")
       id
     }.recover {
       case e: Exception =>
-        logger.error(s"Error inserting repertoire: ${e.getMessage}", e)
+        logger.error(s"Error inserting study: ${e.getMessage}", e)
         throw e
     }
   }
 
-  def addMove(repertoireId: String, parentSfen: String, usi: String, nextSfen: String, comment: Option[String] = None, isPuzzle: Option[Boolean] = None): Future[Unit] = {
+  def addMove(studyId: String, parentSfen: String, usi: String, nextSfen: String, comment: Option[String] = None, isPuzzle: Option[Boolean] = None): Future[Unit] = {
     val nodeKey = sanitizeNodeKey(parentSfen)
-    logger.debug(s"Adding move to repertoire $repertoireId: $usi (nodeKey: $nodeKey)")
-    
-    getRepertoire(repertoireId).flatMap {
+    logger.debug(s"Adding move to study $studyId: $usi (nodeKey: $nodeKey)")
+
+    getStudy(studyId).flatMap {
       case Some(doc) =>
         val nodes = if (doc.containsKey("nodes")) doc.get("nodes").getOrElse(new org.bson.BsonDocument()).asDocument() else new org.bson.BsonDocument()
-        
+
         val nodeData = if (nodes.containsKey(nodeKey)) {
           nodes.get(nodeKey).asDocument()
         } else {
@@ -76,12 +76,12 @@ object RepertoireRepository {
             .append("sfen", new org.bson.BsonString(parentSfen))
             .append("moves", new org.bson.BsonArray())
         }
-        
+
         val moves = nodeData.getArray("moves")
         val moveExists = moves.asScala.exists { m =>
           m.isDocument && m.asDocument().getString("usi").getValue == usi
         }
-        
+
         if (!moveExists) {
           val moveDoc = new org.bson.BsonDocument()
             .append("usi", new org.bson.BsonString(usi))
@@ -92,10 +92,10 @@ object RepertoireRepository {
           isPuzzle.foreach(p => moveDoc.append("isPuzzle", new org.bson.BsonBoolean(p)))
 
           moves.add(moveDoc)
-          
-          logger.debug(s"Updating repertoire $repertoireId with new move $usi")
+
+          logger.debug(s"Updating study $studyId with new move $usi")
           collection.updateOne(
-            equal("_id", new ObjectId(repertoireId)),
+            equal("_id", new ObjectId(studyId)),
             set(s"nodes.$nodeKey", nodeData)
           ).toFuture().map(_ => ())
         } else {
@@ -103,23 +103,23 @@ object RepertoireRepository {
           Future.successful(())
         }
       case None =>
-        logger.warn(s"Repertoire $repertoireId not found")
-        Future.failed(new Exception("Repertoire not found"))
+        logger.warn(s"Study $studyId not found")
+        Future.failed(new Exception("Study not found"))
     }
   }
 
-  def updateMove(repertoireId: String, parentSfen: String, usi: String, comment: Option[String], isPuzzle: Option[Boolean]): Future[Unit] = {
+  def updateMove(studyId: String, parentSfen: String, usi: String, comment: Option[String], isPuzzle: Option[Boolean]): Future[Unit] = {
     val nodeKey = sanitizeNodeKey(parentSfen)
-    logger.debug(s"Updating move in repertoire $repertoireId: $usi (nodeKey: $nodeKey)")
-    
-    getRepertoire(repertoireId).flatMap {
+    logger.debug(s"Updating move in study $studyId: $usi (nodeKey: $nodeKey)")
+
+    getStudy(studyId).flatMap {
       case Some(doc) =>
         val nodes = if (doc.containsKey("nodes")) doc.get("nodes").getOrElse(new org.bson.BsonDocument()).asDocument() else new org.bson.BsonDocument()
-        
+
         if (nodes.containsKey(nodeKey)) {
           val nodeData = nodes.get(nodeKey).asDocument()
           val moves = nodeData.getArray("moves")
-          
+
           moves.asScala.zipWithIndex.find { case (m, _) =>
             m.isDocument && m.asDocument().getString("usi").getValue == usi
           }.foreach { case (m, idx) =>
@@ -133,43 +133,43 @@ object RepertoireRepository {
               case None => moveDoc.remove("isPuzzle")
             }
           }
-          
+
           collection.updateOne(
-            equal("_id", new ObjectId(repertoireId)),
+            equal("_id", new ObjectId(studyId)),
             set(s"nodes.$nodeKey", nodeData)
           ).toFuture().map(_ => ())
         } else {
           Future.failed(new Exception("Node not found"))
         }
-      case None => 
-        Future.failed(new Exception("Repertoire not found"))
+      case None =>
+        Future.failed(new Exception("Study not found"))
     }
   }
 
-  def deleteMove(repertoireId: String, parentSfen: String, usi: String): Future[Unit] = {
+  def deleteMove(studyId: String, parentSfen: String, usi: String): Future[Unit] = {
     val nodeKey = sanitizeNodeKey(parentSfen)
-    logger.debug(s"Deleting move from repertoire $repertoireId: $usi (nodeKey: $nodeKey)")
-    
-    getRepertoire(repertoireId).flatMap {
+    logger.debug(s"Deleting move from study $studyId: $usi (nodeKey: $nodeKey)")
+
+    getStudy(studyId).flatMap {
       case Some(doc) =>
         val nodes = if (doc.containsKey("nodes")) doc.get("nodes").getOrElse(new org.bson.BsonDocument()).asDocument() else new org.bson.BsonDocument()
-        
+
         if (nodes.containsKey(nodeKey)) {
           val nodeData = nodes.get(nodeKey).asDocument()
           val moves = nodeData.getArray("moves")
-          
+
           val newMoves = new org.bson.BsonArray()
           moves.asScala.foreach { m =>
             if (!(m.isDocument && m.asDocument().getString("usi").getValue == usi)) {
               newMoves.add(m)
             }
           }
-          
+
           if (newMoves.size() != moves.size()) {
             nodeData.put("moves", newMoves)
-            logger.debug(s"Updating repertoire $repertoireId after deleting move $usi")
+            logger.debug(s"Updating study $studyId after deleting move $usi")
             collection.updateOne(
-              equal("_id", new ObjectId(repertoireId)),
+              equal("_id", new ObjectId(studyId)),
               set(s"nodes.$nodeKey", nodeData)
             ).toFuture().map(_ => ())
           } else {
@@ -179,18 +179,18 @@ object RepertoireRepository {
           Future.successful(())
         }
       case None =>
-        logger.warn(s"Repertoire $repertoireId not found")
-        Future.failed(new Exception("Repertoire not found"))
+        logger.warn(s"Study $studyId not found")
+        Future.failed(new Exception("Study not found"))
     }
   }
 
-  def deleteRepertoire(id: String): Future[Unit] = {
-    logger.info(s"Deleting repertoire with id: $id")
-    collection.deleteOne(equal("_id", new ObjectId(id))).toFuture().map(_ => logger.info(s"Deleted repertoire $id"))
+  def deleteStudy(id: String): Future[Unit] = {
+    logger.info(s"Deleting study with id: $id")
+    collection.deleteOne(equal("_id", new ObjectId(id))).toFuture().map(_ => logger.info(s"Deleted study $id"))
   }
 
-  def clearRepertoireNodes(id: String): Future[Unit] = {
-    logger.info(s"Clearing nodes for repertoire with id: $id")
+  def clearStudyNodes(id: String): Future[Unit] = {
+    logger.info(s"Clearing nodes for study with id: $id")
     collection.updateOne(
       equal("_id", new ObjectId(id)),
       set("nodes", Document())
@@ -204,29 +204,47 @@ object RepertoireRepository {
     ).toFuture().map(_ => ())
   }
 
-  def toggleRepertoirePublic(id: String, isPublic: Boolean): Future[Unit] = {
-    logger.info(s"Setting repertoire $id is_public=$isPublic")
+  def toggleStudyPublic(id: String, isPublic: Boolean): Future[Unit] = {
+    logger.info(s"Setting study $id is_public=$isPublic")
     collection.updateOne(
       equal("_id", new ObjectId(id)),
       set("is_public", isPublic)
     ).toFuture().map(_ => ())
   }
 
-  def getPublicRepertoires(): Future[Seq[Document]] = {
+  def getPublicStudies(): Future[Seq[Document]] = {
     collection.find(equal("is_public", true))
       .projection(exclude("nodes"))
       .toFuture()
   }
 
-  def getPublicRepertoire(id: String): Future[Option[Document]] = {
+  def getPublicStudy(id: String): Future[Option[Document]] = {
     collection.find(and(equal("_id", new ObjectId(id)), equal("is_public", true))).headOption()
   }
 
-  def saveMovei18nComment(repertoireId: String, parentSfen: String, usi: String, lang: String, comment: String): Future[Unit] = {
-    val nodeKey = sanitizeNodeKey(parentSfen)
-    logger.debug(s"Saving i18n comment for move $usi in repertoire $repertoireId (nodeKey: $nodeKey, lang: $lang)")
+  /** Returns public studies + the authenticated user's own studies (including private). */
+  def getStudiesForViewer(ownerEmail: Option[String]): Future[Seq[Document]] = {
+    val filter = ownerEmail match {
+      case Some(email) => or(equal("is_public", true), equal("ownerEmail", email))
+      case None        => equal("is_public", true)
+    }
+    collection.find(filter).projection(exclude("nodes")).toFuture()
+  }
 
-    getRepertoire(repertoireId).flatMap {
+  /** Returns a study by id if it is public OR belongs to the given owner. */
+  def getStudyForViewer(id: String, ownerEmail: Option[String]): Future[Option[Document]] = {
+    val filter = ownerEmail match {
+      case Some(email) => and(equal("_id", new ObjectId(id)), or(equal("is_public", true), equal("ownerEmail", email)))
+      case None        => and(equal("_id", new ObjectId(id)), equal("is_public", true))
+    }
+    collection.find(filter).headOption()
+  }
+
+  def saveMovei18nComment(studyId: String, parentSfen: String, usi: String, lang: String, comment: String): Future[Unit] = {
+    val nodeKey = sanitizeNodeKey(parentSfen)
+    logger.debug(s"Saving i18n comment for move $usi in study $studyId (nodeKey: $nodeKey, lang: $lang)")
+
+    getStudy(studyId).flatMap {
       case Some(doc) =>
         val nodes = if (doc.containsKey("nodes")) doc.get("nodes").getOrElse(new org.bson.BsonDocument()).asDocument() else new org.bson.BsonDocument()
 
@@ -249,24 +267,24 @@ object RepertoireRepository {
           }
 
           collection.updateOne(
-            equal("_id", new ObjectId(repertoireId)),
+            equal("_id", new ObjectId(studyId)),
             set(s"nodes.$nodeKey", nodeData)
           ).toFuture().map(_ => ())
         } else {
           Future.failed(new Exception("Node not found"))
         }
       case None =>
-        Future.failed(new Exception("Repertoire not found"))
+        Future.failed(new Exception("Study not found"))
     }
   }
 
-  def addMoves(repertoireId: String, parentSfen: String, moves: Seq[(String, String)]): Future[Unit] = {
+  def addMoves(studyId: String, parentSfen: String, moves: Seq[(String, String)]): Future[Unit] = {
     // moves: Seq[(usi, nextSfen)]
     if (moves.isEmpty) return Future.successful(())
 
     val (usi, nextSfen) = moves.head
-    addMove(repertoireId, parentSfen, usi, nextSfen).flatMap { _ =>
-      addMoves(repertoireId, nextSfen, moves.tail)
+    addMove(studyId, parentSfen, usi, nextSfen).flatMap { _ =>
+      addMoves(studyId, nextSfen, moves.tail)
     }
   }
 }

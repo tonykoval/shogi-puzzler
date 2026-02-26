@@ -9,12 +9,8 @@ object LoginRoutes extends BaseRoutes {
   @cask.get("/login")
   def login(request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      val host = request.headers.get("host").flatMap(_.headOption).getOrElse("unknown")
-      logger.info(s"Login requested (Host: $host). Current user: ${getSessionUserEmail(request)}")
-      
       if (getSessionUserEmail(request).isDefined) {
-        logger.info("User already logged in, redirecting to /my-games")
-        noCacheRedirect("/my-games")
+        noCacheRedirect("/database")
       } else if (!oauthEnabled) {
         val adminEmail = config.getString("app.security.admin-email")
         cask.Response(
@@ -33,8 +29,6 @@ object LoginRoutes extends BaseRoutes {
           headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ noCacheHeaders
         )
       } else {
-        logger.info(s"Redirecting to Google OAuth from $host")
-
         val authUrl =
           s"https://accounts.google.com/o/oauth2/v2/auth?" +
             s"client_id=${urlEncode(oauthClientId)}" +
@@ -63,7 +57,7 @@ object LoginRoutes extends BaseRoutes {
       cask.Response(
         "",
         statusCode = 302,
-        headers = Seq("Location" -> "/my-games") ++ noCacheHeaders,
+        headers = Seq("Location" -> "/database") ++ noCacheHeaders,
         cookies = Seq(
           cask.Cookie(
             name = "session",
@@ -134,7 +128,7 @@ object LoginRoutes extends BaseRoutes {
       cask.Response(
         "",
         statusCode = 302,
-        headers = Seq("Location" -> "/my-games") ++ noCacheHeaders,
+        headers = Seq("Location" -> "/database") ++ noCacheHeaders,
         cookies = Seq(
           cask.Cookie(
             name = "session",

@@ -18,7 +18,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
   import org.mongodb.scala.bson.collection.immutable.{Document => BsonDocument}
 
   @cask.get("/puzzle-creator")
-  def puzzleCreatorList(game: Option[String] = None, status: Option[String] = None, request: cask.Request) = {
+  def puzzleCreatorList(game: Option[String] = None, status: Option[String] = None, source: Option[String] = None, request: cask.Request) = {
     withAuth(request, "puzzle-creator") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
@@ -27,25 +27,42 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         case Some(hash) if hash.nonEmpty =>
           Await.result(PuzzleRepository.getPuzzlesForGame(hash), 10.seconds)
         case _ =>
-          status match {
-            case Some("review") =>
-              Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds)
-            case Some("accepted") =>
-              Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
+          source match {
+            case Some(s) if s.nonEmpty =>
+              Await.result(PuzzleRepository.getPuzzlesBySource(email, s), 10.seconds)
             case _ =>
-              Await.result(PuzzleRepository.getUserPuzzles(email), 10.seconds)
+              status match {
+                case Some("review") =>
+                  Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds)
+                case Some("accepted") =>
+                  Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
+                case _ =>
+                  Await.result(PuzzleRepository.getUserPuzzles(email), 10.seconds)
+              }
           }
       }
       val gameInfo = game.filter(_.nonEmpty).flatMap { hash =>
         Await.result(GameRepository.getGameByHash(hash), 10.seconds)
       }
-      // Count review puzzles for badge
-      val reviewCount = game match {
-        case Some(_) => 0L
-        case _ => Await.result(PuzzleRepository.getPuzzlesByStatus(email, "review"), 10.seconds).size.toLong
+      // Review counts per source (for tab badges)
+      val reviewCounts: Map[String, Long] = game match {
+        case Some(_) => Map.empty
+        case _ =>
+          import scala.concurrent.ExecutionContext.Implicits.global
+          import scala.concurrent.Future
+          val (gameF, repF, custF) = (
+            PuzzleRepository.countReviewBySource(email, "game"),
+            PuzzleRepository.countReviewBySource(email, "study"),
+            PuzzleRepository.countReviewBySource(email, "custom")
+          )
+          Map(
+            "game"        -> Await.result(gameF, 10.seconds),
+            "study"       -> Await.result(repF, 10.seconds),
+            "custom"      -> Await.result(custF, 10.seconds)
+          )
       }
       cask.Response(
-        renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, status, reviewCount, pageLang).render,
+        renderPuzzleListPage(userEmail, settings, puzzles, game, gameInfo, source, reviewCounts, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
@@ -59,7 +76,11 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val pageLang = getLang(request)
       cask.Response(
         renderPuzzleEditor(userEmail, settings, None, pageLang).render,
-        headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+        headers = Seq(
+          "Content-Type"                 -> "text/html; charset=utf-8",
+          "Cross-Origin-Opener-Policy"   -> "same-origin",
+          "Cross-Origin-Embedder-Policy" -> "credentialless"
+        )
       )
     }
   }
@@ -75,7 +96,11 @@ object PuzzleCreatorRoutes extends BaseRoutes {
         case Some(doc) =>
           cask.Response(
             renderPuzzleEditor(userEmail, settings, Some(doc), pageLang).render,
-            headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+            headers = Seq(
+              "Content-Type"                 -> "text/html; charset=utf-8",
+              "Cross-Origin-Opener-Policy"   -> "same-origin",
+              "Cross-Origin-Embedder-Policy" -> "credentialless"
+            )
           )
         case None =>
           noCacheRedirect("/puzzle-creator")
@@ -83,7 +108,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
     }
   }
 
-  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument], gameFilter: Option[String] = None, gameInfo: Option[org.mongodb.scala.Document] = None, statusFilter: Option[String] = None, reviewCount: Long = 0, pageLang: String = I18n.defaultLang) = {
+  def renderPuzzleListPage(userEmail: Option[String], settings: AppSettings, puzzles: Seq[BsonDocument], gameFilter: Option[String] = None, gameInfo: Option[org.mongodb.scala.Document] = None, sourceFilter: Option[String] = None, reviewCounts: Map[String, Long] = Map.empty, pageLang: String = I18n.defaultLang) = {
     Components.layout(
       "Puzzle Editor",
       userEmail,
@@ -216,6 +241,14 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             border-radius: 10px;
             margin-left: 8px;
           }
+          .badge-source {
+            background: #2c4a6e;
+            color: #a8c8f0;
+            font-size: 0.72em;
+            padding: 2px 7px;
+            border-radius: 10px;
+            margin-left: 6px;
+          }
           .filter-tabs .nav-link {
             color: #aaa;
           }
@@ -228,14 +261,85 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             color: #ddd;
             border-color: #555;
           }
+          /* ── Puzzle filter bar ──────────────────────────────────── */
+          .pc-filter-bar {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 16px;
+            padding: 10px 14px;
+            background: #26231f;
+            border-radius: 8px;
+            border: 1px solid #3a3835;
+          }
+          .pc-search-wrap {
+            flex: 1;
+            min-width: 180px;
+            position: relative;
+          }
+          .pc-search-wrap .bi-search {
+            position: absolute;
+            left: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #666;
+            pointer-events: none;
+            font-size: .85rem;
+          }
+          .pc-search-input {
+            width: 100%;
+            background: #1a1917;
+            border: 1px solid #3a3835;
+            color: #ddd;
+            border-radius: 5px;
+            padding: 6px 10px 6px 30px;
+            font-size: .85rem;
+            outline: none;
+            transition: border-color .15s;
+          }
+          .pc-search-input:focus { border-color: #5a8fff; }
+          .pc-search-input::placeholder { color: #555; }
+          .pc-status-group { display: flex; gap: 4px; flex-shrink: 0; }
+          .pc-status-btn {
+            background: #2e2a24;
+            border: 1px solid #444;
+            color: #aaa;
+            border-radius: 5px;
+            padding: 5px 12px;
+            font-size: .8rem;
+            cursor: pointer;
+            transition: background .12s, color .12s, border-color .12s;
+            white-space: nowrap;
+          }
+          .pc-status-btn:hover { background: #3a3530; color: #ddd; }
+          .pc-status-btn.active { background: #444; color: #fff; border-color: #666; }
+          .pc-status-btn.active.btn-review { background: #7a1a22; border-color: #dc3545; color: #ffa8af; }
+          .pc-status-btn.active.btn-accepted { background: #1a4a2a; border-color: #198754; color: #a0e8b8; }
+          .pc-status-btn.active.btn-public   { background: #1a3a4a; border-color: #0d6efd; color: #90c8f8; }
+          .pc-filter-count {
+            font-size: .78rem;
+            color: #666;
+            white-space: nowrap;
+            flex-shrink: 0;
+            align-self: center;
+          }
+          .pc-no-results {
+            text-align: center;
+            padding: 40px 20px;
+            color: #666;
+            font-size: .9rem;
+            display: none;
+          }
+          .puzzle-card[hidden] { display: none !important; }
         """).render)
       )
     )(
       div(cls := "mt-4")(
         gameFilter.filter(_.nonEmpty).map { _ =>
           div(cls := "mb-3")(
-            a(href := "/my-games", cls := "btn btn-outline-secondary btn-sm")(
-              i(cls := "bi bi-arrow-left me-1"), "Back to My Games"
+            a(href := "/database", cls := "btn btn-outline-secondary btn-sm")(
+              i(cls := "bi bi-arrow-left me-1"), "Back to Database"
             )
           ): Frag
         }.getOrElse(frag()),
@@ -253,18 +357,35 @@ object PuzzleCreatorRoutes extends BaseRoutes {
           a(href := "/puzzle-creator/new", cls := "btn btn-success")(i(cls := "bi bi-plus-lg me-2"), "New Puzzle")
         ),
         if (gameFilter.forall(_.isEmpty)) {
+          val totalReview = reviewCounts.values.sum
+          def tabBadge(count: Long): Frag = if (count > 0) tag("span")(cls := "badge bg-danger ms-1")(count.toString) else frag()
           tag("ul")(cls := "nav nav-tabs filter-tabs mb-3")(
             tag("li")(cls := "nav-item")(
-              a(cls := s"nav-link${if (statusFilter.isEmpty) " active" else ""}", href := "/puzzle-creator")("All")
-            ),
-            tag("li")(cls := "nav-item")(
-              a(cls := s"nav-link${if (statusFilter.contains("review")) " active" else ""}", href := "/puzzle-creator?status=review")(
-                "Needs Review",
-                if (reviewCount > 0) tag("span")(cls := "badge bg-danger ms-1")(reviewCount.toString) else ()
+              a(cls := s"nav-link${if (sourceFilter.isEmpty) " active" else ""}", href := "/puzzle-creator")(
+                "All",
+                tabBadge(totalReview)
               )
             ),
             tag("li")(cls := "nav-item")(
-              a(cls := s"nav-link${if (statusFilter.contains("accepted")) " active" else ""}", href := "/puzzle-creator?status=accepted")("Accepted")
+              a(cls := s"nav-link${if (sourceFilter.contains("game")) " active" else ""}", href := "/puzzle-creator?source=game")(
+                i(cls := "bi bi-controller me-1"),
+                "From Games",
+                tabBadge(reviewCounts.getOrElse("game", 0L))
+              )
+            ),
+            tag("li")(cls := "nav-item")(
+              a(cls := s"nav-link${if (sourceFilter.contains("study")) " active" else ""}", href := "/puzzle-creator?source=study")(
+                i(cls := "bi bi-diagram-3 me-1"),
+                "From Study",
+                tabBadge(reviewCounts.getOrElse("study", 0L))
+              )
+            ),
+            tag("li")(cls := "nav-item")(
+              a(cls := s"nav-link${if (sourceFilter.contains("custom")) " active" else ""}", href := "/puzzle-creator?source=custom")(
+                i(cls := "bi bi-pencil-square me-1"),
+                "Custom",
+                tabBadge(reviewCounts.getOrElse("custom", 0L))
+              )
             )
           ): Frag
         } else frag(),
@@ -272,6 +393,36 @@ object PuzzleCreatorRoutes extends BaseRoutes {
           div(cls := "alert alert-info")("No puzzles created yet. Click \"New Puzzle\" to get started!")
         } else {
           div(
+            // ── Filter bar ──────────────────────────────────────────
+            div(cls := "pc-filter-bar")(
+              div(cls := "pc-search-wrap")(
+                i(cls := "bi bi-search"),
+                input(
+                  `type` := "search", id := "pc-search",
+                  cls := "pc-search-input",
+                  placeholder := "Search by name…",
+                  attr("autocomplete") := "off"
+                )
+              ),
+              div(cls := "pc-status-group")(
+                button(cls := "pc-status-btn active", attr("data-status") := "all")("All"),
+                button(cls := "pc-status-btn btn-review", attr("data-status") := "review")(
+                  i(cls := "bi bi-hourglass-split me-1"), "Needs Review"
+                ),
+                button(cls := "pc-status-btn btn-accepted", attr("data-status") := "accepted")(
+                  i(cls := "bi bi-check-circle me-1"), "Accepted"
+                )
+              ),
+              scalatags.Text.all.span(style := "width:1px;height:24px;background:#3a3835;flex-shrink:0;align-self:center"),
+              div(cls := "pc-status-group")(
+                button(cls := "pc-status-btn btn-public", attr("data-public") := "true")(
+                  i(cls := "bi bi-globe me-1"), "Public"
+                )
+              ),
+              scalatags.Text.all.span(id := "pc-count", cls := "pc-filter-count")()
+            ),
+            // ── Cards ───────────────────────────────────────────────
+            div(id := "pc-cards")(
             puzzles.map { doc =>
               val puzzleId = doc.getObjectId("_id").toHexString
               val puzzleName = doc.getString("name")
@@ -282,17 +433,33 @@ object PuzzleCreatorRoutes extends BaseRoutes {
               val isReview = puzzleStatus == "review"
               val createdAt = doc.getLong("created_at")
               val dateStr = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm").format(new java.util.Date(createdAt))
+              // Determine source (with backward compat)
+              val rawSource = doc.get("source").map(_.asString().getValue).getOrElse("")
+              val hasKifHash = doc.get("game_kif_hash").exists(v => v.asString().getValue.nonEmpty)
+              val puzzleSource = if (rawSource.nonEmpty) rawSource else if (hasKifHash) "game" else "custom"
+              val (sourceIcon, sourceLabel) = puzzleSource match {
+                case "game"        => ("bi-controller", "From Game")
+                case "study"       => ("bi-diagram-3",  "Study")
+                case _             => ("bi-pencil-square", "Custom")
+              }
 
-              div(cls := "puzzle-card")(
+              div(
+                cls := "puzzle-card",
+                attr("data-name")   := puzzleName.toLowerCase,
+                attr("data-status") := puzzleStatus,
+                attr("data-public") := isPublic.toString
+              )(
                 div(cls := "puzzle-card-icon")(
-                  i(cls := "bi bi-puzzle")
+                  i(cls := s"bi $sourceIcon")
                 ),
                 div(cls := "puzzle-card-content")(
                   div(
                     div(
                       tag("span")(cls := "puzzle-card-name")(puzzleName),
                       if (isReview) tag("span")(cls := "badge-review")("Needs Review") else (),
-                      if (isPublic) tag("span")(cls := "badge-public")("Public") else ()
+                      if (isPublic) tag("span")(cls := "badge-public")("Public") else (),
+                      // Show source badge only on "All" tab
+                      if (sourceFilter.isEmpty) tag("span")(cls := "badge-source")(i(cls := s"bi $sourceIcon me-1"), sourceLabel) else ()
                     ),
                     div(cls := "puzzle-card-date")(dateStr),
                     if (puzzleComments.nonEmpty) div(cls := "puzzle-card-comments")(puzzleComments) else (),
@@ -311,6 +478,10 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                 )
               ): Frag
             }
+            ),  // end #pc-cards
+            div(id := "pc-no-results", cls := "pc-no-results")(
+              i(cls := "bi bi-search me-2"), "No puzzles match your filters."
+            )
           )
         },
         script(raw("""
@@ -332,7 +503,64 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             navigator.clipboard.writeText(sfen).then(() => {
               console.log('SFEN copied to clipboard');
             });
-          }
+          };
+
+          // ── Client-side filtering ──────────────────────────────
+          (function () {
+            var activeStatus = 'all';
+            var publicOnly   = false;
+            var searchVal    = '';
+
+            function applyFilters() {
+              var cards   = document.querySelectorAll('#pc-cards .puzzle-card');
+              var visible = 0;
+              cards.forEach(function (card) {
+                var nameMatch   = !searchVal || card.dataset.name.includes(searchVal);
+                var statusMatch = activeStatus === 'all' || card.dataset.status === activeStatus;
+                var publicMatch = !publicOnly || card.dataset.public === 'true';
+                var show = nameMatch && statusMatch && publicMatch;
+                card.hidden = !show;
+                if (show) visible++;
+              });
+              var total = cards.length;
+              var countEl = document.getElementById('pc-count');
+              if (countEl) countEl.textContent = visible < total ? visible + ' / ' + total : total + ' puzzle' + (total !== 1 ? 's' : '');
+              var noResults = document.getElementById('pc-no-results');
+              if (noResults) noResults.style.display = visible === 0 ? 'block' : 'none';
+            }
+
+            // Search input
+            var searchInput = document.getElementById('pc-search');
+            if (searchInput) {
+              searchInput.addEventListener('input', function () {
+                searchVal = this.value.trim().toLowerCase();
+                applyFilters();
+              });
+            }
+
+            // Status buttons (mutually exclusive group)
+            document.querySelectorAll('.pc-status-btn[data-status]').forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                document.querySelectorAll('.pc-status-btn[data-status]').forEach(function (b) { b.classList.remove('active'); });
+                this.classList.add('active');
+                activeStatus = this.dataset.status;
+                applyFilters();
+              });
+            });
+
+            // Public toggle (independent)
+            var publicBtn = document.querySelector('.pc-status-btn.btn-public');
+            if (publicBtn) {
+              publicBtn.addEventListener('click', function () {
+                publicOnly = !publicOnly;
+                this.classList.toggle('active', publicOnly);
+                applyFilters();
+              });
+            }
+
+            // Init count
+            applyFilters();
+          })();
         """))
       )
     )
@@ -458,9 +686,14 @@ object PuzzleCreatorRoutes extends BaseRoutes {
                   ): Frag
                 }.getOrElse(frag()),
                 div(cls := "row g-2 mb-3")(
-                  div(cls := "col-12")(
+                  div(cls := "col-8")(
                     button(cls := "btn btn-success w-100", id := "analyze-sequence")(
                       i(cls := "bi bi-play-fill me-2"), "Analyze"
+                    )
+                  ),
+                  div(cls := "col-4")(
+                    button(cls := "btn btn-outline-success w-100", id := "ceval-toggle-btn", title := "Local engine analysis in browser")(
+                      i(cls := "bi bi-cpu-fill me-1"), "Local"
                     )
                   )
                 ),
@@ -540,6 +773,7 @@ object PuzzleCreatorRoutes extends BaseRoutes {
             }
           });
         """)),
+        script(src := "/js/ceval.js"),
         script(src := "/js/puzzle-creator.js")
       )
     )
@@ -596,14 +830,18 @@ object PuzzleCreatorRoutes extends BaseRoutes {
       val prelude = json.obj.get("prelude").map(v => if (v.isNull) "" else v.str)
       val rootSfen = json.obj.get("rootSfen").map(v => if (v.isNull) "" else v.str)
       val playPrelude = json.obj.get("playPrelude").map(_.bool)
+      val gameKifHash = json.obj.get("gameKifHash").flatMap(v => if (v.isNull) None else Some(v.str)).filter(_.nonEmpty)
+      val moveNumber = json.obj.get("moveNumber").flatMap(v => scala.util.Try(v.num.toInt).toOption)
+      val source = json.obj.get("source").map(_.str).filter(_.nonEmpty).getOrElse("custom")
 
       val result = id match {
         case Some(puzzleId) =>
           Await.result(PuzzleRepository.updatePuzzle(puzzleId, name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves, tags, blunderAnalyses, prelude, rootSfen, playPrelude), 10.seconds)
           ujson.Obj("success" -> true, "message" -> "Puzzle updated successfully")
         case None =>
-          Await.result(PuzzleRepository.savePuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, blunderMoves = blunderMoves, status = status, tags = tags, blunderAnalyses = blunderAnalyses, prelude = prelude, rootSfen = rootSfen, playPrelude = playPrelude), 10.seconds)
-          ujson.Obj("success" -> true, "message" -> (if (status == "review") "Puzzle saved as draft" else "Puzzle saved successfully"))
+          val insertResult = Await.result(PuzzleRepository.savePuzzle(name, sfen, email, isPublic, comments, selectedSequence, moveComments, analysisData, selectedCandidates, gameKifHash = gameKifHash, blunderMoves = blunderMoves, status = status, tags = tags, moveNumber = moveNumber, blunderAnalyses = blunderAnalyses, prelude = prelude, rootSfen = rootSfen, playPrelude = playPrelude, source = source), 10.seconds)
+          val newId = scala.util.Try(insertResult.getInsertedId.asObjectId().getValue.toHexString).getOrElse("")
+          ujson.Obj("success" -> true, "message" -> (if (status == "review") "Puzzle saved as draft" else "Puzzle saved successfully"), "id" -> newId)
       }
       
       cask.Response(result, headers = Seq("Content-Type" -> "application/json"))

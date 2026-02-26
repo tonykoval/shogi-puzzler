@@ -8,6 +8,7 @@ case class TaskProgress(
     status: String, // "running", "completed", "failed", "waiting"
     message: String,
     resultHtml: Option[String] = None,
+    resultJson: Option[String] = None,
     error: Option[String] = None,
     kifHash: Option[String] = None,
     createdAt: Long = System.currentTimeMillis()
@@ -39,6 +40,18 @@ object TaskManager {
     val current = tasks.get(id)
     if (current != null) {
       tasks.put(id, current.copy(status = "completed", message = "Completed", resultHtml = Some(resultHtml)))
+    }
+  }
+
+  def completeWithJson(id: String, resultHtml: String, resultJson: String): Unit = {
+    val current = tasks.get(id)
+    if (current != null) {
+      tasks.put(id, current.copy(
+        status = "completed",
+        message = "Completed",
+        resultHtml = Some(resultHtml),
+        resultJson = Some(resultJson)
+      ))
     }
   }
 

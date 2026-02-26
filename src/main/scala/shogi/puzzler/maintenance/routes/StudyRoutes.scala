@@ -2,7 +2,7 @@ package shogi.puzzler.maintenance.routes
 
 import cask._
 import scalatags.Text.all._
-import shogi.puzzler.db.{RepertoireRepository, SettingsRepository, AppSettings}
+import shogi.puzzler.db.{StudyRepository, SettingsRepository, AppSettings}
 import shogi.puzzler.game.GameLoader
 import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
@@ -10,13 +10,13 @@ import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
 
-object RepertoireRoutes extends BaseRoutes {
+object StudyRoutes extends BaseRoutes {
 
   // Cache for two-phase Lishogi study import: key -> (chapters, sourceAuthor, studyUrl)
   private val studyCache = new java.util.concurrent.ConcurrentHashMap[String, (Seq[(String, String, Option[String], Option[String])], Option[String], String)]()
 
   private def withOwnership(id: String, email: String)(f: org.mongodb.scala.Document => cask.Response[ujson.Value]): cask.Response[ujson.Value] = {
-    val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
+    val repertoire = Await.result(StudyRepository.getStudy(id), 10.seconds)
     repertoire match {
       case Some(rep) =>
         val ownerEmail = rep.get("ownerEmail").map(_.asString().getValue).getOrElse("")
@@ -30,28 +30,28 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.get("/repertoire")
+  @cask.get("/study")
   def index(request: cask.Request) = {
     withAuth(request, "repertoire") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
       val pageLang = getLang(request)
-      val repertoires = Await.result(RepertoireRepository.getRepertoires(userEmail), 10.seconds)
+      val repertoires = Await.result(StudyRepository.getStudies(userEmail), 10.seconds)
 
       cask.Response(
-        renderRepertoirePage(userEmail, settings, repertoires, pageLang).render,
+        renderStudyPage(userEmail, settings, repertoires, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
   }
 
-  def renderRepertoirePage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document], pageLang: String = I18n.defaultLang) = {
-    // Group repertoires: those with studyUrl grouped together, standalone ones separate
+  def renderStudyPage(userEmail: Option[String], settings: AppSettings, repertoires: Seq[org.mongodb.scala.Document], pageLang: String = I18n.defaultLang) = {
+    // Group studies: those with studyUrl grouped together, standalone ones separate
     val (studyReps, standaloneReps) = repertoires.partition(_.get("studyUrl").exists(v => v.isString && v.asString().getValue.nonEmpty))
     val studyGroups = studyReps.groupBy(_.get("studyUrl").map(_.asString().getValue).getOrElse("")).toSeq.sortBy(_._1)
 
     Components.layout(
-      "Shogi Repertoire",
+      "Shogi Study",
       userEmail,
       settings,
       appVersion,
@@ -59,13 +59,13 @@ object RepertoireRoutes extends BaseRoutes {
       scripts = Seq(
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
-        script(`type` := "module", src := "/js/repertoire.js")
+        script(`type` := "module", src := "/js/study.js")
       )
     )(
       div(cls := "d-flex justify-content-between align-items-center mb-4")(
-        h1("My Repertoires"),
+        h1("My Studies"),
         div(
-          button(cls := "btn btn-primary", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#createRepertoireModal")("Create New"),
+          button(cls := "btn btn-primary", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#createStudyModal")("Create New"),
           button(cls := "btn btn-success ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importKifModal")("Import KIF"),
           button(cls := "btn btn-info ms-2", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#importLishogiStudyModal")("Import Lishogi Study")
         )
@@ -76,7 +76,7 @@ object RepertoireRoutes extends BaseRoutes {
         div(cls := "card-body py-2")(
           div(cls := "d-flex align-items-center gap-3 flex-wrap")(
             div(cls := "flex-grow-1", style := "max-width: 300px;")(
-              input(`type` := "text", id := "repertoireSearch", cls := "form-control form-control-sm bg-dark text-light border-secondary", placeholder := "Search repertoires...", attr("oninput") := "filterRepertoires()")
+              input(`type` := "text", id := "studySearch", cls := "form-control form-control-sm bg-dark text-light border-secondary", placeholder := "Search studies...", attr("oninput") := "filterStudies()")
             ),
             div(cls := "btn-group btn-group-sm")(
               button(cls := "btn btn-outline-light active", attr("data-filter") := "all", onclick := "setSourceFilter(this)")("All"),
@@ -87,7 +87,7 @@ object RepertoireRoutes extends BaseRoutes {
         )
       ),
 
-      div(id := "repertoire-list")(
+      div(id := "study-list")(
         // Study groups
         studyGroups.map { case (studyUrl, reps) =>
           val firstRep = reps.head
@@ -98,7 +98,7 @@ object RepertoireRoutes extends BaseRoutes {
           val author = firstRep.get("sourceAuthor").map(_.asString().getValue).getOrElse("")
           val groupId = studyUrl.hashCode.toHexString
 
-          div(cls := "card bg-dark text-light border-secondary mb-3 repertoire-group", attr("data-source") := "lishogi")(
+          div(cls := "card bg-dark text-light border-secondary mb-3 study-group", attr("data-source") := "lishogi")(
             div(cls := "card-header d-flex align-items-center py-2", attr("data-bs-toggle") := "collapse", attr("data-bs-target") := s"#study-$groupId", role := "button", style := "cursor: pointer;")(
               i(cls := "bi bi-book me-2 text-info"),
               tag("span")(cls := "fw-semibold me-2")(studyName),
@@ -126,20 +126,20 @@ object RepertoireRoutes extends BaseRoutes {
                   val repName = rep.getString("name")
                   val isPublic = rep.get("is_public").exists(_.asBoolean().getValue)
 
-                  div(cls := "list-group-item bg-dark text-light border-secondary d-flex align-items-center py-2 repertoire-item", attr("data-name") := repName.toLowerCase)(
-                    a(href := s"/repertoire/$id", cls := "text-light text-decoration-none flex-grow-1")(
+                  div(cls := "list-group-item bg-dark text-light border-secondary d-flex align-items-center py-2 study-item", attr("data-name") := repName.toLowerCase)(
+                    a(href := s"/study/$id", cls := "text-light text-decoration-none flex-grow-1")(
                       repName
                     ),
                     if (isPublic) tag("span")(cls := "badge bg-success me-2")("Public") else frag(),
                     div(cls := "btn-group btn-group-sm")(
-                      a(href := s"/repertoire/$id", cls := "btn btn-outline-info btn-sm", title := "Open")(i(cls := "bi bi-pencil")),
+                      a(href := s"/study/$id", cls := "btn btn-outline-info btn-sm", title := "Open")(i(cls := "bi bi-pencil")),
                       if (isPublic) frag(
-                        button(cls := "btn btn-outline-success btn-sm", onclick := s"toggleRepertoirePublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
-                        a(href := s"/repertoire-viewer/$id", cls := "btn btn-outline-light btn-sm", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
+                        button(cls := "btn btn-outline-success btn-sm", onclick := s"toggleStudyPublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
+                        a(href := s"/study-viewer/$id", cls := "btn btn-outline-light btn-sm", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
                       ) else {
-                        button(cls := "btn btn-outline-secondary btn-sm", onclick := s"toggleRepertoirePublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
+                        button(cls := "btn btn-outline-secondary btn-sm", onclick := s"toggleStudyPublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
                       },
-                      button(cls := "btn btn-outline-danger btn-sm", onclick := s"deleteRepertoire('$id')", title := "Delete")(i(cls := "bi bi-trash"))
+                      button(cls := "btn btn-outline-danger btn-sm", onclick := s"deleteStudy('$id')", title := "Delete")(i(cls := "bi bi-trash"))
                     )
                   )
                 }
@@ -148,7 +148,7 @@ object RepertoireRoutes extends BaseRoutes {
           )
         },
 
-        // Standalone repertoires
+        // Standalone studies
         div(cls := "row")(
           standaloneReps.map { rep =>
             val id = rep.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
@@ -159,7 +159,7 @@ object RepertoireRoutes extends BaseRoutes {
             val hasSourceUrl = rep.get("sourceUrl").exists(v => v.isString && v.asString().getValue.nonEmpty)
             val sourceType = if (hasSourceUrl) "lishogi" else "manual"
 
-            div(cls := "col-md-4 mb-3 repertoire-item", attr("data-source") := sourceType, attr("data-name") := name.toLowerCase)(
+            div(cls := "col-md-4 mb-3 study-item", attr("data-source") := sourceType, attr("data-name") := name.toLowerCase)(
               div(cls := "card bg-dark text-light border-secondary")(
                 div(cls := "card-body py-2")(
                   div(cls := "d-flex align-items-center mb-2")(
@@ -171,17 +171,17 @@ object RepertoireRoutes extends BaseRoutes {
                     )
                   ),
                   div(cls := "btn-group btn-group-sm")(
-                    a(href := s"/repertoire/$id", cls := "btn btn-outline-info", title := "Open")(i(cls := "bi bi-pencil me-1"), "Open"),
+                    a(href := s"/study/$id", cls := "btn btn-outline-info", title := "Open")(i(cls := "bi bi-pencil me-1"), "Open"),
                     if (isAutoReload) {
-                      button(cls := "btn btn-outline-warning", onclick := s"reloadRepertoire('$id')", title := "Reload from games")(i(cls := "bi bi-arrow-repeat"))
+                      button(cls := "btn btn-outline-warning", onclick := s"reloadStudy('$id')", title := "Reload from games")(i(cls := "bi bi-arrow-repeat"))
                     } else frag(),
                     if (isPublic) frag(
-                      button(cls := "btn btn-outline-success", onclick := s"toggleRepertoirePublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
-                      a(href := s"/repertoire-viewer/$id", cls := "btn btn-outline-light", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
+                      button(cls := "btn btn-outline-success", onclick := s"toggleStudyPublic('$id', false)", title := "Make private")(i(cls := "bi bi-globe")),
+                      a(href := s"/study-viewer/$id", cls := "btn btn-outline-light", target := "_blank", title := "Public viewer")(i(cls := "bi bi-eye"))
                     ) else {
-                      button(cls := "btn btn-outline-secondary", onclick := s"toggleRepertoirePublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
+                      button(cls := "btn btn-outline-secondary", onclick := s"toggleStudyPublic('$id', true)", title := "Make public")(i(cls := "bi bi-lock"))
                     },
-                    button(cls := "btn btn-outline-danger", onclick := s"deleteRepertoire('$id')", title := "Delete")(i(cls := "bi bi-trash"))
+                    button(cls := "btn btn-outline-danger", onclick := s"deleteStudy('$id')", title := "Delete")(i(cls := "bi bi-trash"))
                   )
                 )
               )
@@ -191,17 +191,17 @@ object RepertoireRoutes extends BaseRoutes {
       ),
 
       // Create Modal
-      div(cls := "modal fade", id := "createRepertoireModal", tabindex := "-1")(
+      div(cls := "modal fade", id := "createStudyModal", tabindex := "-1")(
         div(cls := "modal-dialog")(
           div(cls := "modal-content bg-dark text-light border-secondary")(
             div(cls := "modal-header")(
-              h5(cls := "modal-title")("New Repertoire"),
+              h5(cls := "modal-title")("New Study"),
               button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
             ),
             div(cls := "modal-body")(
               div(cls := "mb-3")(
                 label(cls := "form-label")("Name"),
-                input(`type` := "text", id := "repertoireName", cls := "form-control bg-dark text-light border-secondary")
+                input(`type` := "text", id := "studyName", cls := "form-control bg-dark text-light border-secondary")
               ),
               div(cls := "mb-3 form-check")(
                 input(`type` := "checkbox", id := "isAutoReload", cls := "form-check-input"),
@@ -223,7 +223,7 @@ object RepertoireRoutes extends BaseRoutes {
             ),
             div(cls := "modal-footer")(
               button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
-              button(`type` := "button", cls := "btn btn-primary", onclick := "createRepertoire()")("Create")
+              button(`type` := "button", cls := "btn btn-primary", onclick := "createStudy()")("Create")
             )
           )
         )
@@ -234,7 +234,7 @@ object RepertoireRoutes extends BaseRoutes {
         div(cls := "modal-dialog")(
           div(cls := "modal-content bg-dark text-light border-secondary")(
             div(cls := "modal-header")(
-              h5(cls := "modal-title")("Import Repertoire from KIF"),
+              h5(cls := "modal-title")("Import Study from KIF"),
               button(`type` := "button", cls := "btn-close btn-close-white", attr("data-bs-dismiss") := "modal")()
             ),
             div(cls := "modal-body")(
@@ -243,13 +243,13 @@ object RepertoireRoutes extends BaseRoutes {
                 input(`type` := "file", id := "kifFile", cls := "form-control bg-dark text-light border-secondary", attr("accept") := ".kif,.kifu")
               ),
               div(cls := "mb-3")(
-                label(cls := "form-label")("Repertoire Name"),
-                input(`type` := "text", id := "kifRepertoireName", cls := "form-control bg-dark text-light border-secondary", placeholder := "Auto-filled from filename")
+                label(cls := "form-label")("Study Name"),
+                input(`type` := "text", id := "kifStudyName", cls := "form-control bg-dark text-light border-secondary", placeholder := "Auto-filled from filename")
               )
             ),
             div(cls := "modal-footer")(
               button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
-              button(`type` := "button", cls := "btn btn-success", onclick := "importKifRepertoire()")("Import")
+              button(`type` := "button", cls := "btn btn-success", onclick := "importKifStudy()")("Import")
             )
           )
         )
@@ -268,7 +268,7 @@ object RepertoireRoutes extends BaseRoutes {
                 label(cls := "form-label")("Lishogi Study URL"),
                 input(`type` := "text", id := "lishogiStudyUrl", cls := "form-control bg-dark text-light border-secondary", placeholder := "https://lishogi.org/study/...")
               ),
-              p(cls := "text-muted small")("Enter a Lishogi study URL. If the URL includes a chapter ID, only that chapter will be imported. Otherwise, all chapters will be imported as separate repertoires."),
+              p(cls := "text-muted small")("Enter a Lishogi study URL. If the URL includes a chapter ID, only that chapter will be imported. Otherwise, all chapters will be imported as separate studies."),
               div(id := "importStudyProgress", style := "display:none")(
                 div(cls := "mb-2")(tag("small")(id := "importStudyStatus")("Preparing...")),
                 div(cls := "progress")(
@@ -286,7 +286,7 @@ object RepertoireRoutes extends BaseRoutes {
     )
   }
 
-  @cask.post("/repertoire/create")
+  @cask.post("/study/create")
   def create(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       try {
@@ -296,7 +296,7 @@ object RepertoireRoutes extends BaseRoutes {
         val reloadThreshold = json.obj.get("reloadThreshold").map(_.num.toInt).getOrElse(200)
         val reloadColor = json.obj.get("reloadColor").map(_.str)
         logger.info(s"Creating repertoire with name: $name, isAutoReload: $isAutoReload, reloadThreshold: $reloadThreshold, reloadColor: $reloadColor")
-        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), isAutoReload, reloadThreshold, reloadColor), 10.seconds)
+        val id = Await.result(StudyRepository.createStudy(name, Some(email), isAutoReload, reloadThreshold, reloadColor), 10.seconds)
         logger.info(s"Repertoire created with id: $id")
         cask.Response(ujson.Obj("id" -> id), headers = Seq("Content-Type" -> "application/json"))
       } catch {
@@ -307,7 +307,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/create-from-lishogi-study")
+  @cask.post("/study/create-from-lishogi-study")
   def createFromLishogiStudy(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       try {
@@ -354,10 +354,10 @@ object RepertoireRoutes extends BaseRoutes {
           val name = if (chapterName.nonEmpty) chapterName else s"Chapter ${idx + 1}"
           val sName = chapterStudyName.filter(_.nonEmpty)
           val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kifContent)
-          val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
+          val id = Await.result(StudyRepository.createStudy(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
 
           val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
-            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+            prev.flatMap(_ => StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
           }
           Await.result(addFuture, 120.seconds)
 
@@ -380,7 +380,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/prepare-lishogi-study")
+  @cask.post("/study/prepare-lishogi-study")
   def prepareLishogiStudy(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { _ =>
       try {
@@ -445,7 +445,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/import-lishogi-chapter")
+  @cask.post("/study/import-lishogi-chapter")
   def importLishogiChapter(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       try {
@@ -468,10 +468,10 @@ object RepertoireRoutes extends BaseRoutes {
         val sName = chapterStudyName.filter(_.nonEmpty)
 
         val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kifContent)
-        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
+        val id = Await.result(StudyRepository.createStudy(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment, sourceUrl = chapterSourceUrl, sourceAuthor = sourceAuthor, studyUrl = Some(studyUrl), studyName = sName), 10.seconds)
 
         val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
-          prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+          prev.flatMap(_ => StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
         }
         Await.result(addFuture, 120.seconds)
 
@@ -526,7 +526,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/create-from-kif")
+  @cask.post("/study/create-from-kif")
   def createFromKif(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       try {
@@ -535,10 +535,10 @@ object RepertoireRoutes extends BaseRoutes {
         val kif = json("kif").str
 
         val (rootSfen, moves, initialComment) = GameLoader.parseKifTreeWithInitialComment(kif)
-        val id = Await.result(RepertoireRepository.createRepertoire(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment), 10.seconds)
+        val id = Await.result(StudyRepository.createStudy(name, Some(email), rootSfen = Some(rootSfen), rootComment = initialComment), 10.seconds)
 
         val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
-          prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+          prev.flatMap(_ => StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
         }
         Await.result(addFuture, 120.seconds)
 
@@ -555,7 +555,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/:id/import-kif")
+  @cask.post("/study/:id/import-kif")
   def importKif(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -566,7 +566,7 @@ object RepertoireRoutes extends BaseRoutes {
           val (_, moves) = GameLoader.parseKifTree(kif)
 
           val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
-            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+            prev.flatMap(_ => StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
           }
           Await.result(addFuture, 120.seconds)
 
@@ -584,14 +584,14 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/:id/reload-from-study")
+  @cask.post("/study/:id/reload-from-study")
   def reloadFromStudy(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { rep =>
         try {
           val sourceUrl = rep.get("sourceUrl").map(_.asString().getValue).getOrElse("")
           if (sourceUrl.isEmpty) {
-            return cask.Response(ujson.Obj("error" -> "This repertoire has no Lishogi study source URL."), statusCode = 400)
+            return cask.Response(ujson.Obj("error" -> "This study has no Lishogi study source URL."), statusCode = 400)
           }
 
           val kifUrl = if (sourceUrl.endsWith(".kif")) sourceUrl else sourceUrl + ".kif"
@@ -605,12 +605,12 @@ object RepertoireRoutes extends BaseRoutes {
 
           // Update rootComment if present
           initialComment.foreach { comment =>
-            Await.result(RepertoireRepository.updateRootComment(id, comment), 10.seconds)
+            Await.result(StudyRepository.updateRootComment(id, comment), 10.seconds)
           }
 
           // Merge moves (addMove skips duplicates)
           val addFuture = moves.foldLeft(scala.concurrent.Future.successful(())) { case (prev, (parentSfen, usi, nextSfen, comment)) =>
-            prev.flatMap(_ => RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
+            prev.flatMap(_ => StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, None))
           }
           Await.result(addFuture, 120.seconds)
 
@@ -627,31 +627,31 @@ object RepertoireRoutes extends BaseRoutes {
       }
     }
   }
-  @cask.post("/repertoire/toggle-public")
+  @cask.post("/study/toggle-public")
   def togglePublic(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       val json = ujson.read(request.text())
       val id = json("id").str
       val isPublic = json("isPublic").bool
       withOwnership(id, email) { _ =>
-        Await.result(RepertoireRepository.toggleRepertoirePublic(id, isPublic), 10.seconds)
+        Await.result(StudyRepository.toggleStudyPublic(id, isPublic), 10.seconds)
         cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
 
-  @cask.post("/repertoire/delete")
+  @cask.post("/study/delete")
   def delete(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       val id = ujson.read(request.text())("id").str
       withOwnership(id, email) { _ =>
-        Await.result(RepertoireRepository.deleteRepertoire(id), 10.seconds)
+        Await.result(StudyRepository.deleteStudy(id), 10.seconds)
         cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
 
-  @cask.post("/repertoire/reload")
+  @cask.post("/study/reload")
   def reload(request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       val id = ujson.read(request.text())("id").str
@@ -660,7 +660,7 @@ object RepertoireRoutes extends BaseRoutes {
           val isAutoReload = rep.get("isAutoReload").exists(_.asBoolean().getValue)
 
           if (!isAutoReload) {
-            cask.Response(ujson.Obj("error" -> "This repertoire is not configured for auto-reload."), statusCode = 400)
+            cask.Response(ujson.Obj("error" -> "This study is not configured for auto-reload."), statusCode = 400)
           } else {
             val reloadThreshold = rep.get("reloadThreshold").map(_.asInt32().getValue).getOrElse(200)
             val reloadColor = rep.get("reloadColor").map(_.asString().getValue)
@@ -676,18 +676,18 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  private def performReload(repertoireId: String, userEmail: Option[String], threshold: Int, reloadColor: Option[String]): scala.concurrent.Future[Int] = {
+  private def performReload(studyId: String, userEmail: Option[String], threshold: Int, reloadColor: Option[String]): scala.concurrent.Future[Int] = {
     import shogi.puzzler.db.GameRepository
     import shogi.puzzler.game.GameLoader
     import shogi.Color
     import scala.jdk.CollectionConverters._
 
     for {
-      _ <- RepertoireRepository.clearRepertoireNodes(repertoireId)
+      _ <- StudyRepository.clearStudyNodes(studyId)
       games <- GameRepository.getAllGames()
       analyzedGames = games.filter(_.get("is_analyzed").exists(_.asBoolean().getValue))
       
-      _ = logger.info(s"Starting reload for repertoire $repertoireId, found ${analyzedGames.size} analyzed games")
+      _ = logger.info(s"Starting reload for study $studyId, found ${analyzedGames.size} analyzed games")
       
       processedCount <- analyzedGames.foldLeft(scala.concurrent.Future.successful(0)) { (accFut, gameDoc) =>
         accFut.flatMap { acc =>
@@ -757,7 +757,7 @@ object RepertoireRoutes extends BaseRoutes {
                   }
                 }
 
-                addMovesSequentially(repertoireId, movesToAdd.toSeq).map(_ => acc + 1)
+                addMovesSequentially(studyId, movesToAdd.toSeq).map(_ => acc + 1)
               }
             } catch {
               case e: Exception =>
@@ -770,23 +770,23 @@ object RepertoireRoutes extends BaseRoutes {
     } yield processedCount
   }
 
-  private def addMovesSequentially(repertoireId: String, moves: Seq[(String, String, String, String, Boolean)]): scala.concurrent.Future[Unit] = {
+  private def addMovesSequentially(studyId: String, moves: Seq[(String, String, String, String, Boolean)]): scala.concurrent.Future[Unit] = {
     if (moves.isEmpty) scala.concurrent.Future.successful(())
     else {
       val (parent, usi, next, comment, isPuzzle) = moves.head
-      RepertoireRepository.addMove(repertoireId, parent, usi, next, Some(comment), Some(isPuzzle)).flatMap { _ =>
-        addMovesSequentially(repertoireId, moves.tail)
+      StudyRepository.addMove(studyId, parent, usi, next, Some(comment), Some(isPuzzle)).flatMap { _ =>
+        addMovesSequentially(studyId, moves.tail)
       }
     }
   }
 
-  @cask.get("/repertoire/:id")
+  @cask.get("/study/:id")
   def view(id: String, request: cask.Request) = {
     withAuth(request, "repertoire") { email =>
       val userEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(userEmail), 10.seconds)
       val pageLang = getLang(request)
-      val repertoire = Await.result(RepertoireRepository.getRepertoire(id), 10.seconds)
+      val repertoire = Await.result(StudyRepository.getStudy(id), 10.seconds)
 
       repertoire match {
         case Some(rep) =>
@@ -795,7 +795,7 @@ object RepertoireRoutes extends BaseRoutes {
             cask.Response("Forbidden", statusCode = 403)
           } else {
             cask.Response(
-              renderRepertoireEditor(userEmail, settings, rep, pageLang).render,
+              renderStudyEditor(userEmail, settings, rep, pageLang).render,
               headers = Seq("Content-Type" -> "text/html; charset=utf-8")
             )
           }
@@ -804,7 +804,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  def renderRepertoireEditor(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document, pageLang: String = I18n.defaultLang) = {
+  def renderStudyEditor(userEmail: Option[String], settings: AppSettings, repertoire: org.mongodb.scala.Document, pageLang: String = I18n.defaultLang) = {
     val id = repertoire.get("_id").map(_.asObjectId().getValue.toString).getOrElse("")
     val name = repertoire.getString("name")
     val sourceUrl = repertoire.get("sourceUrl").map(_.asString().getValue).getOrElse("")
@@ -900,7 +900,7 @@ object RepertoireRoutes extends BaseRoutes {
         ),
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
-        input(`type` := "hidden", attr("id") := "repertoireId", attr("value") := id),
+        input(`type` := "hidden", attr("id") := "studyId", attr("value") := id),
         input(`type` := "hidden", attr("id") := "sourceUrl", attr("value") := sourceUrl),
         
         // Move Edit Modal
@@ -938,7 +938,7 @@ object RepertoireRoutes extends BaseRoutes {
                   label(cls := "form-label")("KIF File"),
                   input(`type` := "file", attr("id") := "kifFileInput", cls := "form-control bg-dark text-light border-secondary", attr("accept") := ".kif,.kifu")
                 ),
-                p(cls := "text-muted small")("Moves and variations from the KIF file will be merged into this repertoire.")
+                p(cls := "text-muted small")("Moves and variations from the KIF file will be merged into this study.")
               ),
               div(cls := "modal-footer")(
                 button(`type` := "button", cls := "btn btn-secondary", attr("data-bs-dismiss") := "modal")("Cancel"),
@@ -1009,13 +1009,13 @@ object RepertoireRoutes extends BaseRoutes {
           )
         ),
 
-        script(src := "/js/repertoire-editor.js", `type` := "module")
+        script(src := "/js/study-editor.js", `type` := "module")
       )
     )
   }
 
-  @cask.get("/repertoire/:id/json")
-  def getRepertoireJson(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+  @cask.get("/study/:id/json")
+  def getStudyJson(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { rep =>
         logger.info(s"Found repertoire: ${rep.getString("name")}")
@@ -1027,7 +1027,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/:id/move")
+  @cask.post("/study/:id/move")
   def addMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -1038,14 +1038,14 @@ object RepertoireRoutes extends BaseRoutes {
         val comment = json.obj.get("comment").map(_.str)
         val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
 
-        Await.result(RepertoireRepository.addMove(id, parentSfen, usi, nextSfen, comment, isPuzzle), 10.seconds)
+        Await.result(StudyRepository.addMove(id, parentSfen, usi, nextSfen, comment, isPuzzle), 10.seconds)
         logger.info(s"Move $usi added successfully")
         cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
 
-  @cask.post("/repertoire/:id/move/update")
+  @cask.post("/study/:id/move/update")
   def updateMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -1055,14 +1055,14 @@ object RepertoireRoutes extends BaseRoutes {
         val comment = json.obj.get("comment").map(_.str)
         val isPuzzle = json.obj.get("isPuzzle").map(_.bool)
 
-        Await.result(RepertoireRepository.updateMove(id, parentSfen, usi, comment, isPuzzle), 10.seconds)
+        Await.result(StudyRepository.updateMove(id, parentSfen, usi, comment, isPuzzle), 10.seconds)
         logger.info(s"Move $usi updated successfully")
         cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
 
-  @cask.post("/repertoire/:id/move/delete")
+  @cask.post("/study/:id/move/delete")
   def deleteMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -1070,14 +1070,14 @@ object RepertoireRoutes extends BaseRoutes {
         val parentSfen = json("parentSfen").str
         val usi = json("usi").str
 
-        Await.result(RepertoireRepository.deleteMove(id, parentSfen, usi), 10.seconds)
+        Await.result(StudyRepository.deleteMove(id, parentSfen, usi), 10.seconds)
         logger.info(s"Move $usi deleted successfully")
         cask.Response(ujson.Obj("success" -> true))
       }
     }
   }
 
-  @cask.post("/repertoire/:id/import")
+  @cask.post("/study/:id/import")
   def importMoves(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -1107,7 +1107,7 @@ object RepertoireRoutes extends BaseRoutes {
 
             val (c, p) = if (isLast) (comment, isPuzzle) else (None, None)
 
-            Await.result(RepertoireRepository.addMove(id, currentParentSfen, usi, nextSfen, c, p), 10.seconds)
+            Await.result(StudyRepository.addMove(id, currentParentSfen, usi, nextSfen, c, p), 10.seconds)
             currentParentSfen = nextSfen
             importedCount += 1
           }
@@ -1118,7 +1118,7 @@ object RepertoireRoutes extends BaseRoutes {
     }
   }
 
-  @cask.post("/repertoire/:id/move/translate")
+  @cask.post("/study/:id/move/translate")
   def translateMove(id: String, request: cask.Request): cask.Response[ujson.Value] = {
     withAuthJson(request, "repertoire") { email =>
       withOwnership(id, email) { _ =>
@@ -1129,7 +1129,7 @@ object RepertoireRoutes extends BaseRoutes {
           val lang       = json("lang").str
           val comment    = json("comment").str
 
-          Await.result(RepertoireRepository.saveMovei18nComment(id, parentSfen, usi, lang, comment), 10.seconds)
+          Await.result(StudyRepository.saveMovei18nComment(id, parentSfen, usi, lang, comment), 10.seconds)
           cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
         } catch {
           case e: Exception =>

@@ -24,16 +24,28 @@ object AnalysisQueue {
       kif: String,
       player: String,
       source: String,
-      userEmail: Option[String]
+      userEmail: Option[String],
+      shallowLimitOverride: Option[Int] = None,
+      deepLimitOverride: Option[Int] = None,
+      winChanceDropOverride: Option[Double] = None
   )
 
   private val queue = new LinkedBlockingQueue[AnalysisTask]()
   private var currentWorkers = 0
   private val workersLock = new Object()
 
-  def enqueue(taskId: String, kif: String, player: String, source: String, userEmail: Option[String]): Unit = {
+  def enqueue(
+      taskId: String,
+      kif: String,
+      player: String,
+      source: String,
+      userEmail: Option[String],
+      shallowLimitOverride: Option[Int] = None,
+      deepLimitOverride: Option[Int] = None,
+      winChanceDropOverride: Option[Double] = None
+  ): Unit = {
     logger.info(s"[AnalysisQueue] Enqueuing task $taskId for player $player")
-    queue.put(AnalysisTask(taskId, kif, player, source, userEmail))
+    queue.put(AnalysisTask(taskId, kif, player, source, userEmail, shallowLimitOverride, deepLimitOverride, winChanceDropOverride))
     TaskManager.updateProgress(taskId, s"In queue (position: ${queue.size()})")
     ensureWorkers()
   }
@@ -85,19 +97,23 @@ object AnalysisQueue {
       val analyzer = new GameAnalyzer(engineManager)
       val extractor = new PuzzleExtractor(analyzer)
 
+      val shallowLimit   = task.shallowLimitOverride.getOrElse(settings.shallowLimit)
+      val deepLimit      = task.deepLimitOverride.getOrElse(settings.deepLimit)
+      val winChanceDrop  = task.winChanceDropOverride.getOrElse(settings.winChanceDropThreshold)
+
       TaskManager.updateProgress(taskId, "Parsing KIF...")
       val parsedGame = GameLoader.parseKif(kif, Some(player))
-      
-      logger.info(s"[AnalysisQueue] Task $taskId: Starting shallow analysis...")
-      val shallowResults = analyzer.analyzeShallow(parsedGame, settings.shallowLimit, msg => TaskManager.updateProgress(taskId, msg))
+
+      logger.info(s"[AnalysisQueue] Task $taskId: Starting shallow analysis (shallowLimit=${shallowLimit}s, deepLimit=${deepLimit}s, threshold=$winChanceDrop)...")
+      val shallowResults = analyzer.analyzeShallow(parsedGame, shallowLimit, msg => TaskManager.updateProgress(taskId, msg))
 
       TaskManager.updateProgress(taskId, "Extracting puzzles...")
       logger.info(s"[AnalysisQueue] Task $taskId: Shallow analysis complete. Extracting puzzles...")
       val puzzles = extractor.extract(
         parsedGame,
         shallowResults,
-        settings.winChanceDropThreshold,
-        settings.deepLimit
+        winChanceDrop,
+        deepLimit
       )
 
       val kifHash = GameRepository.md5Hash(kif)
@@ -129,7 +145,9 @@ object AnalysisQueue {
       }
 
       logger.info(s"[AnalysisQueue] Task $taskId complete. ${puzzles.size} puzzles found.")
-      TaskManager.complete(taskId, s"Analysis complete. ${puzzles.size} puzzles found.")
+      val humanMsg  = s"Analysis complete. ${puzzles.size} puzzles found."
+      val jsonResult = ujson.write(ujson.Obj("puzzleCount" -> puzzles.size, "kifHash" -> kifHash))
+      TaskManager.completeWithJson(taskId, humanMsg, jsonResult)
     } catch {
       case e: Exception =>
         logger.error(s"[AnalysisQueue] Task $taskId failed", e)
@@ -190,7 +208,8 @@ object AnalysisQueue {
         gameKifHash = Some(kifHash),
         blunderMoves = blunderMoves,
         status = "review",
-        moveNumber = Some(puzzle.moveNumber)
+        moveNumber = Some(puzzle.moveNumber),
+        source = "game"
       ),
       10.seconds
     )

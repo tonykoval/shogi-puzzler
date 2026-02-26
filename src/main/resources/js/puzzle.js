@@ -321,29 +321,6 @@ $(".random").click( function () {
     selectSituation(randomNumber(0, selectedData.length - 1), selectedData)
 });
 
-$(".lishogi-game").click( function () {
-    if (selected && selected.id) {
-        const puzzleId = selected.id;
-        const gameHash = puzzleId.split('#')[0];
-        if (gameHash && gameHash !== "unknown") {
-            window.open("/lishogi-redirect?hash=" + gameHash, "_blank");
-            return;
-        }
-    }
-    
-    if (selected && selected.site && selected.site.startsWith("http")) {
-        window.open(selected.site, "_blank");
-    } else {
-        // Fallback for cases where site might be just "lishogi" or "shogiwars"
-        console.warn("No valid game URL found in selected.site:", selected.site);
-        Swal.fire({
-            icon: 'info',
-            title: (window.i18n && window.i18n['viewer.gameLinkUnavailable']) || 'Game Link Unavailable',
-            text: (window.i18n && window.i18n['viewer.gameLinkUnavailableText']) || 'A direct link to this game is not available. You can try searching for it on Lishogi.',
-            confirmButtonColor: '#3085d6'
-        });
-    }
-});
 
 $("#isPublicCheckbox").change(function() {
     if (selected && selected._id && selected._id.$oid) {
@@ -801,12 +778,6 @@ function selectSituation(id, data) {
         const hasValidHash = gameHash && gameHash !== "unknown";
         const hasValidUrl = selected.site && selected.site.startsWith("http");
         
-        if (!hasValidHash && !hasValidUrl) {
-            $(".lishogi-game").addClass('disabled').attr('title', 'Game link unavailable');
-        } else {
-            $(".lishogi-game").removeClass('disabled').attr('title', 'View on Lishogi');
-        }
-
         // Apply i18n comment if a translation exists for the user's language
     if (userLang !== 'en' && selected.comments_i18n && selected.comments_i18n[userLang]) {
             selected.comment = selected.comments_i18n[userLang];
@@ -1371,7 +1342,7 @@ function runEngineAnalysis(sfen, playerColor, resultContainer) {
                         scoreText = `Mate in +${score.value}`;
                         scoreClass = 'text-success';
                     } else if (score.value < 0) {
-                        scoreText = `Mated in ${score.value}`;
+                        scoreText = `Mated in ${Math.abs(score.value)}`;
                         scoreClass = 'text-danger';
                     } else {
                         scoreText = 'Draw';

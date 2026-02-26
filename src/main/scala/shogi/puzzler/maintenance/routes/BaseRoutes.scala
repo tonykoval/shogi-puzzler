@@ -19,12 +19,9 @@ object BaseRoutes {
   private val logger = LoggerFactory.getLogger(getClass)
   private val config = ConfigFactory.load()
 
-  private val sessionSecret: String = {
-    val s = if (config.hasPath("app.security.session-secret")) config.getString("app.security.session-secret")
-            else config.getString("app.oauth.google.client-secret")
-    logger.info(s"Global Session secret initialized (hash: ${s.hashCode})")
-    s
-  }
+  private val sessionSecret: String =
+    if (config.hasPath("app.security.session-secret")) config.getString("app.security.session-secret")
+    else config.getString("app.oauth.google.client-secret")
 
   private val hmacKey = new SecretKeySpec(sessionSecret.getBytes(StandardCharsets.UTF_8), "HmacSHA256")
 
@@ -59,11 +56,16 @@ abstract class BaseRoutes extends Routes {
     }
   }
 
+  protected def withOptionalAuth(request: cask.Request)(f: Option[String] => cask.Response[String]): cask.Response[String] = {
+    redirectToConfiguredHostIfNeeded(request).getOrElse {
+      f(getSessionUserEmail(request))
+    }
+  }
+
   protected def withAuth(request: cask.Request, page: String)(f: String => cask.Response[String]): cask.Response[String] = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
       val userEmail = getSessionUserEmail(request)
       if (userEmail.isEmpty) {
-        logger.info(s"[$page] Redirecting to /login because userEmail is empty")
         noCacheRedirect("/login")
       } else {
         val email = userEmail.get
@@ -134,7 +136,6 @@ abstract class BaseRoutes extends Routes {
   protected def encodeSession(userJson: Value): String = {
     val payload = Base64.getUrlEncoder.withoutPadding().encodeToString(ujson.write(userJson).getBytes(StandardCharsets.UTF_8))
     val signature = BaseRoutes.sign(payload)
-    logger.info(s"Encoding session: payload=$payload, signature=$signature")
     s"$payload.$signature"
   }
 
@@ -155,15 +156,8 @@ abstract class BaseRoutes extends Routes {
     }
   }
 
-  protected def getSessionUser(request: cask.Request): Option[Value] = {
-    val sessionCookie = request.cookies.get("session")
-    if (sessionCookie.isEmpty) {
-      val allCookies = request.exchange.getRequestHeaders.get("Cookie")
-      val host = request.headers.get("host").flatMap(_.headOption).getOrElse("unknown")
-      logger.info(s"No session cookie found in request to ${request.exchange.getRequestPath} (Host: $host). Raw Cookie headers: $allCookies")
-    }
-    sessionCookie.map(_.value).flatMap(decodeSession)
-  }
+  protected def getSessionUser(request: cask.Request): Option[Value] =
+    request.cookies.get("session").map(_.value).flatMap(decodeSession)
 
   protected def getSessionUserEmail(request: cask.Request): Option[String] = {
     getSessionUser(request).map(_("email").str)

@@ -13,7 +13,7 @@ object GameRepository {
       "kif" -> kif,
       "sente" -> gameDetails.getOrElse("sente", ""),
       "gote" -> gameDetails.getOrElse("gote", ""),
-      "date" -> gameDetails.getOrElse("date", ""),
+      "date" -> gameDetails.getOrElse("date", "").replace("/", "-"),
       "site" -> gameDetails.getOrElse("site", ""),
       "kif_hash" -> md5Hash(kif),
       "timestamp" -> System.currentTimeMillis(),
@@ -35,9 +35,117 @@ object GameRepository {
       .map(_.headOption.flatMap(_.get("is_analyzed")).exists(_.asBoolean().getValue))(scala.concurrent.ExecutionContext.global)
   }
 
+  /** One-time migration: replaces '/' with '-' in all date fields (idempotent). */
+  def normalizeDates(): Future[Int] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    collection.find(
+      org.mongodb.scala.model.Filters.regex("date", "/")
+    ).toFuture().flatMap { docs =>
+      Future.sequence(docs.map { doc =>
+        val kifHash = doc.get("kif_hash").map(_.asString().getValue).getOrElse("")
+        val date    = doc.get("date").map(_.asString().getValue).getOrElse("").replace("/", "-")
+        if (kifHash.nonEmpty)
+          collection.updateOne(
+            org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
+            org.mongodb.scala.model.Updates.set("date", date)
+          ).toFuture().map(_ => 1)
+        else
+          Future.successful(0)
+      })
+    }.map(_.sum)
+  }
+
   def getAllGames(): Future[Seq[Document]] = {
     collection.find().toFuture()
   }
+
+  def getGamesPaged(
+      page: Int,
+      pageSize: Int,
+      source: String = "all",
+      status: String = "all",
+      playerSearch: String = "",
+      myNicknames: Seq[String] = Seq.empty,
+      sortDir: String = "desc"
+  ): Future[(Seq[Document], Long)] = {
+    import scala.concurrent.ExecutionContext.Implicits.global
+    import java.util.regex.Pattern
+
+    val filterList = scala.collection.mutable.ListBuffer[org.bson.conversions.Bson]()
+
+    source match {
+      case "lishogi" =>
+        filterList += org.mongodb.scala.model.Filters.regex("site", ".*lishogi.*", "i")
+      case "shogiwars" =>
+        filterList += org.mongodb.scala.model.Filters.or(
+          org.mongodb.scala.model.Filters.regex("site", ".*wars.*", "i"),
+          org.mongodb.scala.model.Filters.equal("site", ""),
+          org.mongodb.scala.model.Filters.exists("site", false)
+        )
+      case "dojo81" =>
+        filterList += org.mongodb.scala.model.Filters.or(
+          org.mongodb.scala.model.Filters.regex("site", ".*81dojo.*", "i"),
+          org.mongodb.scala.model.Filters.regex("site", ".*dojo81.*", "i")
+        )
+      case _ => // all — no filter
+    }
+
+    status match {
+      case "analyzed" =>
+        filterList += org.mongodb.scala.model.Filters.equal("is_analyzed", true)
+      case "pending" =>
+        filterList += org.mongodb.scala.model.Filters.not(
+          org.mongodb.scala.model.Filters.equal("is_analyzed", true)
+        )
+      case _ => // all
+    }
+
+    val trimmed = playerSearch.trim
+    if (trimmed.nonEmpty) {
+      val escaped = Pattern.quote(trimmed)
+      filterList += org.mongodb.scala.model.Filters.or(
+        org.mongodb.scala.model.Filters.regex("sente", s".*$escaped.*", "i"),
+        org.mongodb.scala.model.Filters.regex("gote",  s".*$escaped.*", "i")
+      )
+    }
+
+    if (myNicknames.nonEmpty) {
+      val nicknameFilters = myNicknames.flatMap { n =>
+        val e = Pattern.quote(n)
+        Seq(
+          org.mongodb.scala.model.Filters.regex("sente", s".*$e.*", "i"),
+          org.mongodb.scala.model.Filters.regex("gote",  s".*$e.*", "i")
+        )
+      }
+      filterList += org.mongodb.scala.model.Filters.or(nicknameFilters: _*)
+    }
+
+    val combinedFilter = filterList.toSeq match {
+      case Seq()  => new org.bson.Document()
+      case Seq(f) => f
+      case fs     => org.mongodb.scala.model.Filters.and(fs: _*)
+    }
+
+    val sort = if (sortDir == "asc")
+      org.mongodb.scala.model.Sorts.ascending("date", "timestamp")
+    else
+      org.mongodb.scala.model.Sorts.descending("date", "timestamp")
+    val skip = (page - 1) * pageSize
+
+    val totalFut = collection.countDocuments(combinedFilter).toFuture()
+    val docsFut  = collection.find(combinedFilter).sort(sort).skip(skip).limit(pageSize).toFuture()
+
+    for {
+      total <- totalFut
+      docs  <- docsFut
+    } yield (docs, total)
+  }
+
+  def countGames(): Future[Long] =
+    collection.countDocuments().toFuture()
+
+  def countAnalyzedGames(): Future[Long] =
+    collection.countDocuments(org.mongodb.scala.model.Filters.equal("is_analyzed", true)).toFuture()
 
   def exists(kif: String): Future[Boolean] = {
     collection.find(org.mongodb.scala.model.Filters.equal("kif_hash", md5Hash(kif))).toFuture().map(_.nonEmpty)(scala.concurrent.ExecutionContext.global)
@@ -151,6 +259,26 @@ object GameRepository {
     collection.updateOne(
       org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
       org.mongodb.scala.model.Updates.set("scores", scores)
+    ).toFuture()
+  }
+
+  def saveMoveComment(kifHash: String, moveIdx: Int, comment: String): Future[UpdateResult] = {
+    if (comment.trim.isEmpty)
+      collection.updateOne(
+        org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
+        org.mongodb.scala.model.Updates.unset(s"move_comments.$moveIdx")
+      ).toFuture()
+    else
+      collection.updateOne(
+        org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
+        org.mongodb.scala.model.Updates.set(s"move_comments.$moveIdx", comment.trim)
+      ).toFuture()
+  }
+
+  def saveMoveAnalysis(kifHash: String, moveIdx: Int, candidatesJson: String): Future[UpdateResult] = {
+    collection.updateOne(
+      org.mongodb.scala.model.Filters.equal("kif_hash", kifHash),
+      org.mongodb.scala.model.Updates.set(s"move_analysis.$moveIdx", candidatesJson)
     ).toFuture()
   }
 

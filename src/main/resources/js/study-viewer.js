@@ -1,10 +1,10 @@
 
 let sg;
-let repertoire;
+let study;
 let currentSfen;
 let history = [];
 let moveHistory = [];
-const repertoireId = document.getElementById('repertoireId').value;
+const studyId = document.getElementById('studyId').value;
 let lastMoveComment = null;
 
 function parseAnnotations(comment) {
@@ -62,10 +62,10 @@ function formatMoveText(usi, pos) {
 }
 
 async function loadRepertoire(lastMoveUsi) {
-    const response = await fetch(`/repertoire-viewer/${repertoireId}/json`);
-    repertoire = await response.json();
+    const response = await fetch(`/study-viewer/${studyId}/json`);
+    study = await response.json();
     if (!currentSfen) {
-        currentSfen = repertoire.rootSfen;
+        currentSfen = study.rootSfen;
     }
     renderBoard(lastMoveUsi);
     renderVariations();
@@ -79,11 +79,11 @@ function updateMenuState() {
     const advanceBtn = document.querySelector('button[onclick="advanceMove()"]');
 
     if (revertBtn) revertBtn.disabled = history.length === 0;
-    if (toRootBtn) toRootBtn.disabled = currentSfen === repertoire.rootSfen;
+    if (toRootBtn) toRootBtn.disabled = currentSfen === study.rootSfen;
 
     if (advanceBtn) {
         const nodeKey = sanitizeSfen(currentSfen);
-        const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+        const node = (study && study.nodes && study.nodes[nodeKey]) || { moves: [] };
         advanceBtn.disabled = node.moves.length !== 1;
     }
 }
@@ -192,7 +192,7 @@ function handleBoardMove(moveData) {
     const usi = Shogiops.makeUsi(move);
 
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire && repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study && study.nodes && study.nodes[nodeKey]) || { moves: [] };
     const matchingMove = node.moves.find(m => m.usi === usi);
 
     if (matchingMove) {
@@ -245,7 +245,7 @@ function updateCommentDisplay() {
     const panel = document.getElementById('comment-display');
     if (!panel) return;
 
-    const comment = lastMoveComment || (currentSfen === repertoire?.rootSfen ? repertoire?.rootComment : null);
+    const comment = lastMoveComment || (currentSfen === study?.rootSfen ? study?.rootComment : null);
 
     if (comment) {
         const { text } = parseAnnotations(comment);
@@ -262,13 +262,13 @@ function updateCommentDisplay() {
 function displayMoveArrows() {
     updateCommentDisplay();
     if (!sg) return;
-    if (!repertoire || !repertoire.nodes) {
+    if (!study || !study.nodes) {
         sg.setAutoShapes([]);
         return;
     }
 
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
     const shapes = [];
 
@@ -298,7 +298,7 @@ function renderVariations() {
     container.innerHTML = '';
 
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes && repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
 
     if (node.moves.length === 0) {
         container.innerHTML = '<div class="text-muted p-2">No moves from this position.</div>';
@@ -356,11 +356,11 @@ export function revertMove() {
 }
 
 export function toRoot() {
-    if (currentSfen !== repertoire.rootSfen) {
+    if (currentSfen !== study.rootSfen) {
         lastMoveComment = null;
         history = [];
         moveHistory = [];
-        currentSfen = repertoire.rootSfen;
+        currentSfen = study.rootSfen;
         renderBoard();
         renderVariations();
         updateMenuState();
@@ -369,9 +369,9 @@ export function toRoot() {
 }
 
 export function advanceMove() {
-    if (!repertoire || !repertoire.nodes) return;
+    if (!study || !study.nodes) return;
     const nodeKey = sanitizeSfen(currentSfen);
-    const node = (repertoire.nodes[nodeKey]) || { moves: [] };
+    const node = (study.nodes[nodeKey]) || { moves: [] };
     if (node.moves.length === 1) {
         const move = node.moves[0];
         lastMoveComment = move.comment || null;

@@ -165,7 +165,11 @@ object SettingsRepository {
       ocrProfiles = ocrProfiles,
       activeOcrProfile = activeOcrProfile,
       analysisWorkers = Option(doc.getInteger("analysis_workers")).map(_.toInt).getOrElse(config.getInt("app.analysis.workers")),
-      isConfigured = true
+      isConfigured = true,
+      posAnalysisCandidates = Option(doc.getInteger("pos_analysis_candidates")).map(_.toInt).getOrElse(3),
+      posAnalysisDepth = Option(doc.getInteger("pos_analysis_depth")).map(_.toInt).getOrElse(20),
+      posAnalysisSeconds = Option(doc.getInteger("pos_analysis_seconds")).map(_.toInt).getOrElse(5),
+      posAnalysisSequences = Option(doc.getInteger("pos_analysis_sequences")).map(_.toInt).getOrElse(5)
     )
   }
 
@@ -211,7 +215,11 @@ object SettingsRepository {
       "shallow_limit" -> settings.shallowLimit,
       "deep_limit" -> settings.deepLimit,
       "win_chance_drop_threshold" -> settings.winChanceDropThreshold,
-      "active_ocr_profile" -> settings.activeOcrProfile.getOrElse("")
+      "active_ocr_profile" -> settings.activeOcrProfile.getOrElse(""),
+      "pos_analysis_candidates" -> settings.posAnalysisCandidates,
+      "pos_analysis_depth" -> settings.posAnalysisDepth,
+      "pos_analysis_seconds" -> settings.posAnalysisSeconds,
+      "pos_analysis_sequences" -> settings.posAnalysisSequences
     )
 
     if (userEmail == "global") {
@@ -249,7 +257,11 @@ case class AppSettings(
   ocrProfiles: Map[String, Map[String, Rect]] = Map.empty,
   activeOcrProfile: Option[String] = None,
   analysisWorkers: Int = 1,
-  isConfigured: Boolean = false
+  isConfigured: Boolean = false,
+  posAnalysisCandidates: Int = 3,
+  posAnalysisDepth: Int = 20,
+  posAnalysisSeconds: Int = 5,
+  posAnalysisSequences: Int = 5
 )
 
 object AppSettings {

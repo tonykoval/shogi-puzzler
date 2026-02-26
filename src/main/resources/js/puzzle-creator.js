@@ -524,12 +524,15 @@ function savePuzzleWithStatus(status) {
     }
 
     const urlParams = new URLSearchParams(window.location.search);
+    // Preserve existing source when editing; default to 'custom' for new puzzles
+    const existingSource = (window.__puzzleData && window.__puzzleData.source) || 'custom';
     const data = {
         name: name,
         sfen: sfen || '',
         comments: comments || '',
         isPublic: isPublic,
         status: status,
+        source: currentPuzzleId ? existingSource : 'custom',
         moveComments: getAllMoveComments(),
         blunderMoves: blunderMoves,
         tags: tags,
@@ -1879,7 +1882,7 @@ $(document).ready(function() {
     if (window.__puzzleData) {
         loadPuzzle(window.__puzzleData, false);
     } else {
-        // Check URL params for repertoire review link
+        // Check URL params for study review link
         const urlParams = new URLSearchParams(window.location.search);
         const sfenParam = urlParams.get('sfen');
         const blunderParam = urlParams.get('blunder');
@@ -1997,4 +2000,84 @@ $(document).ready(function() {
             initBoard();
         }
     });
+
+    // Local engine toggle
+    $('#ceval-toggle-btn').on('click', function() { pcToggleCeval(); });
+    if (typeof ClientEval === 'undefined' || !ClientEval.isSupported()) {
+        $('#ceval-toggle-btn').prop('disabled', true)
+            .attr('title', 'Requires modern browser with SharedArrayBuffer (Chrome/Edge/Firefox)');
+    }
 });
+
+// ---------------------------------------------------------------------------
+// puzzle-creator: local engine analysis
+// ---------------------------------------------------------------------------
+
+let _pcCeval    = null;
+let _pcCevalOn  = false;
+
+function pcToggleCeval() {
+    if (_pcCevalOn) {
+        _pcCevalOn = false;
+        _pcCeval?.stop();
+        $('#ceval-toggle-btn').removeClass('active').html('<i class="bi bi-cpu-fill me-1"></i>Local');
+        return;
+    }
+    _pcCevalOn = true;
+    $('#ceval-toggle-btn').addClass('active').html('<i class="bi bi-cpu-fill me-1"></i>Local ✓');
+
+    if (!_pcCeval) {
+        _pcCeval = new ClientEval({
+            multiPv: 3,
+            onReady: function(name) {
+                const short = (name || 'Engine').replace(/TOURNAMENT.*/, '').trim();
+                $('#ceval-toggle-btn').attr('title', 'Local: ' + short);
+            },
+            onEval: function(ev) { pcOnEval(ev); },
+        });
+        _pcCeval.init();
+    }
+    pcAnalyzeCurrent();
+}
+
+function pcAnalyzeCurrent() {
+    if (!_pcCevalOn || !sg) return;
+    const sfen = getCurrentSfen();
+    if (!sfen) return;
+    _pcCeval.analyze(sfen, { movetime: 30000, multiPv: 3 });
+}
+
+function pcOnEval(ev) {
+    if (!_pcCevalOn || !ev || !ev.pvs || !ev.pvs.length) return;
+
+    // Convert PVs to the format expected by the existing showArrows/showMoves code
+    const arrows = [];
+    const brushes = ['green', 'blue', 'yellow'];
+    const turnColor = sg ? (sg.state ? sg.state.turnColor : 'sente') : 'sente';
+
+    ev.pvs.slice(0, 3).forEach(function(pv, idx) {
+        const move = pv.moves && pv.moves[0];
+        if (!move) return;
+        let shape = null;
+        if (move.includes('*')) {
+            const roleMap = { p:'pawn', l:'lance', n:'knight', s:'silver', g:'gold', b:'bishop', r:'rook' };
+            const role = roleMap[move[0].toLowerCase()];
+            if (role) shape = { orig: { color: turnColor, role }, dest: move.substring(2, 4), brush: brushes[idx] || 'paleGrey' };
+        } else {
+            const clean = move.replace('+','').replace('=','');
+            if (clean.length >= 4) shape = { orig: clean.substring(0,2), dest: clean.substring(2,4), brush: brushes[idx] || 'paleGrey' };
+        }
+        if (shape) arrows.push(shape);
+    });
+
+    if (sg && arrows.length) {
+        sg.set({ drawable: { shapes: arrows, enabled: true } });
+    }
+
+    // Update engine info display
+    const label = ev.mate != null
+        ? (ev.mate > 0 ? '▲ 詰' : '▽ 詰') + Math.abs(ev.mate)
+        : (ev.cp != null ? (ev.cp >= 0 ? '▲ ' : '▽ ') + Math.abs(ev.cp) : '');
+    const depth = ev.depth ? ` d${ev.depth}` : '';
+    $('#ceval-toggle-btn').html(`<i class="bi bi-cpu-fill me-1"></i>Local: ${label}${depth}`);
+}
