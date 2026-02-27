@@ -5,11 +5,13 @@ import java.util.UUID
 
 case class TaskProgress(
     id: String,
-    status: String, // "running", "completed", "failed"
+    status: String, // "running", "completed", "failed", "waiting"
     message: String,
     resultHtml: Option[String] = None,
+    resultJson: Option[String] = None,
     error: Option[String] = None,
-    kifHash: Option[String] = None
+    kifHash: Option[String] = None,
+    createdAt: Long = System.currentTimeMillis()
 )
 
 object TaskManager {
@@ -17,7 +19,7 @@ object TaskManager {
 
   def createTask(kifHash: Option[String] = None): String = {
     val id = UUID.randomUUID().toString
-    tasks.put(id, TaskProgress(id, "running", "Initializing...", kifHash = kifHash))
+    tasks.put(id, TaskProgress(id, "waiting", "Pending...", kifHash = kifHash))
     id
   }
 
@@ -29,7 +31,8 @@ object TaskManager {
   def updateProgress(id: String, message: String): Unit = {
     val current = tasks.get(id)
     if (current != null) {
-      tasks.put(id, current.copy(message = message))
+      val newStatus = if (message.contains("In queue")) "waiting" else "running"
+      tasks.put(id, current.copy(message = message, status = newStatus))
     }
   }
 
@@ -37,6 +40,18 @@ object TaskManager {
     val current = tasks.get(id)
     if (current != null) {
       tasks.put(id, current.copy(status = "completed", message = "Completed", resultHtml = Some(resultHtml)))
+    }
+  }
+
+  def completeWithJson(id: String, resultHtml: String, resultJson: String): Unit = {
+    val current = tasks.get(id)
+    if (current != null) {
+      tasks.put(id, current.copy(
+        status = "completed",
+        message = "Completed",
+        resultHtml = Some(resultHtml),
+        resultJson = Some(resultJson)
+      ))
     }
   }
 

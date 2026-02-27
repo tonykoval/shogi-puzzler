@@ -86,6 +86,11 @@ case class CpScore(cp: Int) extends Score {
   def centipawns: Option[Int] = Some(cp)
   def negate: Score = CpScore(-cp)
 
+  // Cap at ±14999 so cp values never stray into the mate-encoding zone (±15000+).
+  // YaneuraOu can report cp > 30000 for overwhelmingly winning positions (e.g. VALUE_SUPERIOR).
+  // Without capping, the JS display formula (30000 - |s|) would produce a negative mate count.
+  override def toNumeric: Int = math.min(math.abs(cp), 14999) * (if (cp >= 0) 1 else -1)
+
   override def toString: String =
     if (cp > 0) s"+$cp" else cp.toString
 }

@@ -9,14 +9,26 @@ object LoginRoutes extends BaseRoutes {
   @cask.get("/login")
   def login(request: cask.Request) = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      val host = request.headers.get("host").flatMap(_.headOption).getOrElse("unknown")
-      logger.info(s"Login requested (Host: $host). Current user: ${getSessionUserEmail(request)}")
-      if (oauthEnabled && getSessionUserEmail(request).isDefined) {
-        logger.info("User already logged in, redirecting to /my-games")
-        noCacheRedirect("/my-games")
+      if (getSessionUserEmail(request).isDefined) {
+        noCacheRedirect("/database")
+      } else if (!oauthEnabled) {
+        val adminEmail = config.getString("app.security.admin-email")
+        cask.Response(
+          s"""
+             |<html>
+             |<head><title>Login (No OAuth)</title></head>
+             |<body>
+             |  <h1>Login (Development Mode)</h1>
+             |  <ul>
+             |    <li><a href="/login-as?email=${urlEncode(adminEmail)}">Login as Admin ($adminEmail)</a></li>
+             |    <li><a href="/login-as?email=test@example.com">Login as Test User (test@example.com)</a></li>
+             |  </ul>
+             |</body>
+             |</html>
+             |""".stripMargin,
+          headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ noCacheHeaders
+        )
       } else {
-        logger.info(s"Redirecting to Google OAuth from $host")
-
         val authUrl =
           s"https://accounts.google.com/o/oauth2/v2/auth?" +
             s"client_id=${urlEncode(oauthClientId)}" +
@@ -30,6 +42,36 @@ object LoginRoutes extends BaseRoutes {
     }
   }
 
+  @cask.get("/login-as")
+  def loginAs(email: String, request: cask.Request) = {
+    if (oauthEnabled) {
+      noCacheRedirect("/")
+    } else {
+      logger.info(s"Logging in as: $email (OAuth disabled)")
+      val mockUserJson = ujson.Obj(
+        "email" -> email,
+        "name" -> email.split("@").head.capitalize,
+        "picture" -> ""
+      )
+      val sessionToken = encodeSession(mockUserJson)
+      cask.Response(
+        "",
+        statusCode = 302,
+        headers = Seq("Location" -> "/database") ++ noCacheHeaders,
+        cookies = Seq(
+          cask.Cookie(
+            name = "session",
+            value = sessionToken,
+            httpOnly = true,
+            maxAge = 60 * 60 * 24 * 30,
+            path = "/",
+            sameSite = "Lax"
+          )
+        )
+      )
+    }
+  }
+
   @cask.get("/callback")
   def callback(
                 code: String,
@@ -38,16 +80,11 @@ object LoginRoutes extends BaseRoutes {
                 prompt: Option[String] = None,
                 hd: Option[String] = None,
                 state: Option[String] = None,
+                iss: Option[String] = None,
                 request: cask.Request = null
               ): cask.Response[String] = {
 
     Option(request).flatMap(redirectToConfiguredHostIfNeeded).getOrElse {
-      logger.info(s"OAuth callback: scope=$scope authuser=$authuser prompt=$prompt hd=$hd state=$state")
-      if (request != null) {
-        logger.info(s"Full callback URL: ${request.exchange.getRequestURI}")
-        logger.info(s"Query Params: ${request.queryParams}")
-      }
-
       val tokenResp = requests.post(
         "https://oauth2.googleapis.com/token",
         data = ujson.Obj(
@@ -72,29 +109,17 @@ object LoginRoutes extends BaseRoutes {
 
       logger.info(s"User authenticated: email=$email")
 
-      if (!allowedEmails.contains(email)) {
-        logger.info(s"❌ Access denied for $email")
-
-        return cask.Response(
-          s"""
-          <h1>403 - Forbidden</h1>
-          <p>User <b>$email</b> is not authorized.</p>
-          <a href="/">Back to Home</a>
-          """,
-          statusCode = 403,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8")
-        )
+      if (!isEmailAllowed(email)) {
+        logger.warn(s"Access denied for $email")
+        return noCacheRedirect("/")
       }
 
-      logger.info(s"✅ Access granted for $email")
       val sessionToken = encodeSession(userJson)
-      val host = Option(request).flatMap(_.headers.get("host")).flatMap(_.headOption).getOrElse("localhost")
-      logger.info(s"Setting session cookie for host $host: $sessionToken")
 
       cask.Response(
         "",
         statusCode = 302,
-        headers = Seq("Location" -> "/my-games") ++ noCacheHeaders,
+        headers = Seq("Location" -> "/database") ++ noCacheHeaders,
         cookies = Seq(
           cask.Cookie(
             name = "session",
@@ -112,13 +137,6 @@ object LoginRoutes extends BaseRoutes {
   @cask.get("/logout")
   def logout(request: cask.Request): cask.Response[String] = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      request.cookies
-        .get("session")
-        .map(_.value)
-        .foreach { sid =>
-          logger.info(s"Logout session=$sid")
-        }
-
       cask.Response(
         "",
         statusCode = 302,

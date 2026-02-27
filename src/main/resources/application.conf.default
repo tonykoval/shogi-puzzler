@@ -13,8 +13,10 @@ app {
   }
 
   security {
-    allowed-emails = "your.email@example.com"
-    allowed-emails = ${?APP_SECURITY_ALLOWED_EMAILS}
+    admin-email = "your.email@example.com"
+    admin-email = ${?APP_SECURITY_ADMIN_EMAIL}
+    session-secret = "generate-your-secret-here"
+    session-secret = ${?APP_SECURITY_SESSION_SECRET}
   }
 
   fetcher {
@@ -26,7 +28,12 @@ app {
     }
     dojo81 {
       nickname = "dojo81_user"
+    }
+    tech_dojo81 {
+      username = "81tech_user"
+      username = ${?TECH_DOJO81_USERNAME}
       password = ""
+      password = ${?TECH_DOJO81_PASSWORD}
     }
   }
 
@@ -37,6 +44,8 @@ app {
     deep-limit = ${?APP_ANALYSIS_DEEP_LIMIT}
     win-chance-drop-threshold = 0.1
     win-chance-drop-threshold = ${?APP_ANALYSIS_WIN_CHANCE_DROP_THRESHOLD}
+    workers = 1
+    workers = ${?APP_ANALYSIS_WORKERS}
   }
 
   mongodb {
@@ -48,5 +57,15 @@ app {
   engine {
     path = "engine/YaneuraOu_NNUE"
     path = ${?ENGINE_PATH}
+  }
+
+  github {
+    url = ""
+    url = ${?APP_GITHUB_URL}
+  }
+
+  contact {
+    email = ""
+    email = ${?APP_CONTACT_EMAIL}
   }
 }

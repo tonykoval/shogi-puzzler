@@ -311,41 +311,52 @@ sg-square-over {
 }
 
 .sg-wrap .sg-shapes g.primary ellipse {
-  stroke: #15781b;
+  stroke: #198754;
 }
 .sg-wrap .sg-shapes g.primary line {
-  stroke: #15781b;
+  stroke: #198754;
 }
 .sg-wrap .sg-shapes marker#arrowhead-primary path {
-  fill: #15781b;
+  fill: #198754;
 }
 
 .sg-wrap .sg-shapes g.alternative0 ellipse {
-  stroke: #882020;
+  stroke: #dc3545;
 }
 .sg-wrap .sg-shapes g.alternative0 line {
-  stroke: #882020;
+  stroke: #dc3545;
 }
 .sg-wrap .sg-shapes marker#arrowhead-alternative0 path {
-  fill: #882020;
+  fill: #dc3545;
 }
 
 .sg-wrap .sg-shapes g.alternative1 ellipse {
-  stroke: #003088;
+  stroke: #ab47bc;
 }
 .sg-wrap .sg-shapes g.alternative1 line {
-  stroke: #003088;
+  stroke: #ab47bc;
 }
 .sg-wrap .sg-shapes marker#arrowhead-alternative1 path {
-  fill: #003088;
+  fill: #ab47bc;
 }
 
 .sg-wrap .sg-shapes g.alternative2 ellipse {
-  stroke: #e68f00;
+  stroke: #0dcaf0;
 }
 .sg-wrap .sg-shapes g.alternative2 line {
-  stroke: #e68f00;
+  stroke: #0dcaf0;
 }
 .sg-wrap .sg-shapes marker#arrowhead-alternative2 path {
-  fill: #e68f00;
+  fill: #0dcaf0;
+}
+
+/* Hint circle - yellow */
+.sg-wrap .sg-shapes g.hint ellipse {
+  stroke: #ffc107;
+}
+.sg-wrap .sg-shapes g.hint line {
+  stroke: #ffc107;
+}
+.sg-wrap .sg-shapes marker#arrowhead-hint path {
+  fill: #ffc107;
 }

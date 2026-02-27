@@ -12,15 +12,76 @@ object MongoDBConnection {
   private val database: MongoDatabase = client.getDatabase(config.getString("database"))
   
   val gamesCollection: MongoCollection[Document] = database.getCollection("games")
-  val puzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
+  val legacyPuzzlesCollection: MongoCollection[Document] = database.getCollection("puzzles")
+  val puzzlesCollection: MongoCollection[Document] = database.getCollection("custom_puzzles")
   val settingsCollection: MongoCollection[Document] = database.getCollection("settings")
+  val studyCollection: MongoCollection[Document] = database.getCollection("repertoire")
+  val trainingPiecesCollection: MongoCollection[Document] = database.getCollection("training_pieces")
+  val trainingHandsCollection: MongoCollection[Document] = database.getCollection("training_hands")
+  val ocrHistoryCollection: MongoCollection[Document] = database.getCollection("ocr_history")
+  val usersCollection: MongoCollection[Document] = database.getCollection("users")
+  val srsCardsCollection: MongoCollection[Document] = database.getCollection("srs_cards")
+  val srsAttemptsCollection: MongoCollection[Document] = database.getCollection("srs_attempts")
+
+  ping().recover {
+    case e: Exception =>
+      println(s"[DB] CRITICAL: Failed to connect to MongoDB: ${e.getMessage}")
+      println(s"[DB] Check your connection string in application.conf and ensure MongoDB is accessible.")
+      "failed"
+  }(scala.concurrent.ExecutionContext.global)
 
   // Create unique index on kif_hash
   gamesCollection.createIndex(
     org.mongodb.scala.model.Indexes.ascending("kif_hash"),
     org.mongodb.scala.model.IndexOptions().unique(true)
-  ).toFuture().foreach(_ => println("[DB] Unique index on kif_hash created"))(scala.concurrent.ExecutionContext.global)
-  
+  ).toFuture()
+
+  // Create index on game_kif_hash for puzzles collection
+  puzzlesCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("game_kif_hash")
+  ).toFuture()
+
+  // Create unique index on image_data for training collections
+  trainingPiecesCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("image_data"),
+    org.mongodb.scala.model.IndexOptions().unique(true)
+  ).toFuture()
+
+  trainingHandsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("image_data"),
+    org.mongodb.scala.model.IndexOptions().unique(true)
+  ).toFuture()
+
+  // Index on is_public for study (repertoire) collection
+  studyCollection.createIndex(
+    org.mongodb.scala.model.Indexes.ascending("is_public")
+  ).toFuture()
+
+  // SRS: unique compound index on (user_email, puzzle_object_id)
+  srsCardsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("puzzle_object_id")
+    ),
+    org.mongodb.scala.model.IndexOptions().unique(true)
+  ).toFuture()
+
+  // SRS: query index on (user_email, next_review)
+  srsCardsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("next_review")
+    )
+  ).toFuture()
+
+  // SRS attempts: index on (user_email, reviewed_at)
+  srsAttemptsCollection.createIndex(
+    org.mongodb.scala.model.Indexes.compoundIndex(
+      org.mongodb.scala.model.Indexes.ascending("user_email"),
+      org.mongodb.scala.model.Indexes.ascending("reviewed_at")
+    )
+  ).toFuture()
+
   def ping(): Future[String] = {
     database.runCommand(Document("ping" -> 1)).toFuture().map(_ => "pong")(scala.concurrent.ExecutionContext.global)
   }

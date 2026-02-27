@@ -62,14 +62,15 @@ object LishogiSource extends GameSource {
             val sente = getPlayerName("sente")
             val gote = getPlayerName("gote")
             
-            val date = java.time.Instant.ofEpochMilli(data("createdAt").num.toLong)
-              .atZone(java.time.ZoneId.systemDefault())
+            val createdAt = data("createdAt").num.toLong
+            val date = java.time.Instant.ofEpochMilli(createdAt)
+              .atZone(java.time.ZoneId.of("UTC"))
               .toLocalDate.toString
             
             val id = data("id").str
 
             val (existingGame, isAnalyzed) = if (skipExisting) {
-              val dbG = Await.result(GameRepository.findByMetadata(sente, gote, date), 5.seconds)
+              val dbG = Await.result(GameRepository.findByMetadata(sente, gote, date), 10.seconds)
               (dbG, dbG.exists(_.get("is_analyzed").exists(_.asBoolean().getValue)))
             } else {
               (None, false)

@@ -1,4 +1,4 @@
-ThisBuild / version := "0.1.1-SNAPSHOT"
+ThisBuild / version := "0.1.3-SNAPSHOT"
 
 ThisBuild / scalaVersion := "2.13.18"
 
@@ -24,6 +24,7 @@ libraryDependencies ++= Seq(
   "com.typesafe" % "config" % "1.4.5",
   "io.github.wandererxii" %% "scalashogi" % "12.2.1",
   "com.microsoft.playwright" % "playwright" % "1.49.0",
+  "net.sourceforge.tess4j" % "tess4j" % "5.14.0",
 
   "org.scalatest" %% "scalatest" % "3.2.17" % Test
 )

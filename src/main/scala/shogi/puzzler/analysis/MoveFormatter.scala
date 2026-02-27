@@ -9,14 +9,14 @@ import shogi.variant.Standard
 object MoveFormatter {
   /**
    * Get visual arrow color for UI based on move ranking.
-   * 1st = primary (blue), 2nd = alternative1 (green), 3rd = alternative2 (yellow)
+   * 1st = primary (green), 2nd = alternative1 (purple), 3rd = alternative2 (cyan)
    */
   def getArrowColor(moveRanking: Option[Int] = None): String = {
     moveRanking match {
       case Some(1) => "primary"
       case Some(2) => "alternative1"
       case Some(3) => "alternative2"
-      case None    => "alternative0"
+      case _       => "alternative0"
     }
   }
 
@@ -28,7 +28,7 @@ object MoveFormatter {
       case Some(1) => "1st"
       case Some(2) => "2nd"
       case Some(3) => "3rd"
-      case None    => "your"
+      case _       => "your"
     }
   }
 

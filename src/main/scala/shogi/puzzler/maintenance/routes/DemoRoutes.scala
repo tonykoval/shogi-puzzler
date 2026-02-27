@@ -3,6 +3,7 @@ package shogi.puzzler.maintenance.routes
 import cask._
 import scalatags.Text.all._
 import shogi.puzzler.db.{SettingsRepository, AppSettings}
+import shogi.puzzler.i18n.I18n
 import shogi.puzzler.ui.Components
 import shogi.puzzler.domain.SearchGame
 import scala.concurrent.Await
@@ -12,27 +13,25 @@ object DemoRoutes extends BaseRoutes {
 
   @cask.get("/demo")
   def demo(request: cask.Request) = {
-    val userEmail = getSessionUserEmail(request)
-    if (oauthEnabled && userEmail.isEmpty) {
-      logger.info(s"[DEMO] Redirecting to /login because userEmail is empty")
-      noCacheRedirect("/login")
-    } else {
-      val effectiveEmail = userEmail.orElse(Some("demo@example.com"))
+    withAuth(request, "demo") { email =>
+      val effectiveEmail = Some(email)
       val settings = Await.result(SettingsRepository.getAppSettings(effectiveEmail), 10.seconds)
-      
+      val pageLang = getLang(request)
+
       cask.Response(
-        renderDemoPage(effectiveEmail, settings).render,
+        renderDemoPage(effectiveEmail, settings, pageLang).render,
         headers = Seq("Content-Type" -> "text/html; charset=utf-8")
       )
     }
   }
 
-  def renderDemoPage(userEmail: Option[String], settings: AppSettings) = {
+  def renderDemoPage(userEmail: Option[String], settings: AppSettings, pageLang: String = I18n.defaultLang) = {
     Components.layout(
-      "Maintenance Demo", 
-      userEmail, 
+      "Maintenance Demo",
+      userEmail,
       settings,
       appVersion,
+      lang = pageLang,
       scripts = Seq(
         script(src := "https://cdn.jsdelivr.net/npm/chart.js"),
         script(src := "/js/maintenance.js")

@@ -1,0 +1,2054 @@
+let sg;
+let currentPuzzleId = null;
+let isPlayingSequence = false;
+let currentSequenceMoves = [];
+let currentSequenceIndex = -1;
+let autoplayInterval = null;
+let initialSfen = null;
+let allSequences = []; // Store all candidate sequences
+let displayedSequenceIndex = 0; // Which sequence is currently displayed
+let selectedCandidateIndices = []; // Checked candidates for viewer (max 3)
+let isAnalyzing = false; // Track if analysis is running
+let arrowsVisible = true; // Track arrow visibility state
+let moveComments = {}; // Store comments for moves: { "candidateIndex_moveIndex": "comment text" }
+let blunderMoves = []; // Store blunder move USI strings (e.g. ["7g7f", "P*5e"])
+let isCapturingBlunder = false; // "Pick from board" mode for blunder moves
+let tags = []; // Store tag strings for categorization
+let _preludeQueue = [];
+let _preludeTimer = null;
+let _preludePos = null;
+let _preludeOnDone = null;
+let _preludeTotalMoves = 0;
+let _preludeStepsDone = 0;
+let _preludeSfenAfter = null; // puzzle SFEN to restore after prelude
+
+// Helper functions for sequence type detection
+function isBlunderSequence(seq) { return seq[0] && seq[0]._type === 'blunder'; }
+function isBestSequence(seq) { return !seq[0]._type || seq[0]._type === 'best'; }
+
+// Get game filter from URL query parameter
+function getGameFilter() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('game') || '';
+}
+
+// Build puzzle list URL preserving game filter
+function getPuzzleListUrl() {
+    const game = getGameFilter();
+    return game ? `/puzzle-creator?game=${encodeURIComponent(game)}` : '/puzzle-creator';
+}
+
+// ── Prelude UI helpers ────────────────────────────────────────────────────────
+
+function renderPreludeVisual() {
+    const prelude = $('#puzzle-prelude').val().trim();
+    const moves = prelude ? prelude.split(' ').filter(Boolean) : [];
+    const container = $('#prelude-moves-visual');
+    container.empty();
+    if (moves.length > 0) {
+        moves.forEach((m, i) => {
+            container.append(
+                $(`<span class="badge bg-secondary border border-dark text-light me-1" style="font-family:monospace;">${i + 1}. ${m}</span>`)
+            );
+        });
+    } else {
+        container.append($('<span class="text-muted" style="font-size:0.8em;">No prelude moves</span>'));
+    }
+}
+
+// ── Prelude (position-replay) helpers ────────────────────────────────────────
+
+function getPreludeSpeed() {
+    const v = parseInt(localStorage.getItem('preludeSpeed'));
+    return isNaN(v) ? 400 : v;
+}
+function setPreludeSpeed(ms) {
+    localStorage.setItem('preludeSpeed', String(ms));
+    _syncPreludeSpeedBtns();
+    if (ms > 0 && _preludeQueue.length > 0) {
+        // Restart auto-advance if switching from manual
+        if (!_preludeTimer) _preludeTimer = setTimeout(_preludeStep, ms);
+    }
+}
+function advancePrelude() { if (_preludeQueue.length) _preludeStep(); }
+function skipPrelude() {
+    if (_preludeTimer) { clearTimeout(_preludeTimer); _preludeTimer = null; }
+    while (_preludeQueue.length) _applyPreludeMove(_preludeQueue.shift());
+    _preludeDone();
+}
+
+function _applyPreludeMove(usi) {
+    const move = Shogiops.parseUsi(usi);
+    if (!move || !_preludePos) return;
+    _preludePos.play(move);
+    const newSfen = Shogiops.sfen.makeSfen(_preludePos);
+    const [board, , hands] = newSfen.split(' ');
+    const lastDests = 'role' in move
+        ? [Shogiops.makeSquare(move.to)]
+        : [Shogiops.makeSquare(move.from), Shogiops.makeSquare(move.to)];
+    const lastPiece = 'role' in move
+        ? { role: move.role, color: _preludePos.turn === 'sente' ? 'gote' : 'sente' }
+        : undefined;
+    sg.set({ sfen: { board, hands: hands || '-' }, turnColor: _preludePos.turn, lastDests, lastPiece });
+}
+
+function _preludeStep() {
+    _preludeTimer = null;
+    if (!_preludeQueue.length) { _preludeDone(); return; }
+    _applyPreludeMove(_preludeQueue.shift());
+    _preludeStepsDone++;
+    _updatePreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) return; // manual — wait for button click
+    _preludeTimer = setTimeout(_preludeStep, spd);
+}
+
+function _preludeDone() {
+    _hidePreludeBar();
+    const cb = _preludeOnDone;
+    _preludeOnDone = null; _preludeQueue = []; _preludeTimer = null; _preludePos = null;
+    cb && cb();
+}
+
+function startPrelude(usis, rootSfenStr, onDone) {
+    if (!usis.length) { onDone && onDone(); return; }
+    _preludeQueue = [...usis];
+    _preludeTotalMoves = usis.length;
+    _preludeStepsDone = 0;
+    _preludeOnDone = onDone;
+    _preludePos = Shogiops.sfen.parseSfen('standard', rootSfenStr, false).value;
+    sg.set({ movable: { free: false, color: 'none' }, droppable: { free: false, color: 'none' } });
+    _showPreludeBar();
+    const spd = getPreludeSpeed();
+    if (spd === 0) _preludeStep(); // play first move, then wait for clicks
+    else _preludeTimer = setTimeout(_preludeStep, Math.min(spd, 300));
+}
+
+function _showPreludeBar() {
+    if (document.getElementById('prelude-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'prelude-bar';
+    bar.className = 'prelude-bar';
+    bar.innerHTML = `
+        <div class="prelude-bar__info">
+            <i class="bi bi-play-fill me-1"></i>
+            <span id="prelude-bar-text">Preparing position… 0 / ${_preludeTotalMoves}</span>
+        </div>
+        <div class="prelude-bar__controls">
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="200" onclick="setPreludeSpeed(200)">Fast</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="400" onclick="setPreludeSpeed(400)">Normal</button>
+                <button class="btn btn-sm btn-outline-light prelude-speed-btn" data-speed="700" onclick="setPreludeSpeed(700)">Slow</button>
+                <button class="btn btn-sm btn-outline-secondary prelude-speed-btn" data-speed="0" onclick="setPreludeSpeed(0)">Manual</button>
+            </div>
+            <button class="btn btn-sm btn-outline-warning ms-2" id="prelude-next-btn" onclick="advancePrelude()">▶ Next</button>
+            <button class="btn btn-sm btn-outline-info ms-1" onclick="skipPrelude()">Skip ⏭</button>
+        </div>`;
+    document.body.appendChild(bar);
+    _syncPreludeSpeedBtns();
+}
+function _hidePreludeBar() {
+    const bar = document.getElementById('prelude-bar');
+    if (bar) bar.remove();
+}
+function _updatePreludeBar() {
+    const txt = document.getElementById('prelude-bar-text');
+    if (txt) txt.textContent = `Preparing position… ${_preludeStepsDone} / ${_preludeTotalMoves}`;
+    const nextBtn = document.getElementById('prelude-next-btn');
+    if (nextBtn) nextBtn.style.display = getPreludeSpeed() === 0 ? '' : 'none';
+}
+function _syncPreludeSpeedBtns() {
+    const spd = getPreludeSpeed();
+    document.querySelectorAll('.prelude-speed-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.dataset.speed) === spd);
+    });
+    const nextBtn = document.getElementById('prelude-next-btn');
+    if (nextBtn) nextBtn.style.display = spd === 0 ? '' : 'none';
+}
+
+window.setPreludeSpeed = setPreludeSpeed;
+window.advancePrelude = advancePrelude;
+window.skipPrelude = skipPrelude;
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Initialize the board
+function initBoard(sfen = null) {
+    const config = {
+        coordinates: {
+            enabled: true,
+            files: ['9', '8', '7', '6', '5', '4', '3', '2', '1'],
+            ranks: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
+        },
+        orientation: 'sente',
+        movable: {
+            free: true,
+            color: 'both'
+        },
+        droppable: {
+            free: true,
+            color: 'both'
+        },
+        draggable: {
+            enabled: true,
+            showGhost: true
+        },
+        selectable: {
+            enabled: true
+        },
+        events: {
+            change: updateBoardInfo,
+            select: handleSquareSelect,
+            move: handleBoardMove,
+            drop: handleBoardDrop
+        }
+    };
+
+    // If SFEN is provided, parse and set the position
+    if (sfen && sfen.trim() !== '') {
+        try {
+            const parseResult = Shogiops.sfen.parseSfen('standard', sfen, false);
+            if (parseResult.isOk) {
+                const pos = parseResult.value;
+                
+                // Extract parts from SFEN
+                const sfenParts = sfen.split(' ');
+                const boardSfen = sfenParts[0];
+                const handsStr = sfenParts.length > 2 ? sfenParts[2] : '';
+                
+                // Set the SFEN with board and hands string
+                config.sfen = {
+                    board: boardSfen,
+                    hands: handsStr
+                };
+                config.turnColor = pos.turn === 'black' ? 'sente' : 'gote';
+            } else {
+                console.error('Invalid SFEN:', sfen, parseResult.error);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Invalid SFEN',
+                    text: 'The provided SFEN notation is invalid. Using initial position.'
+                });
+            }
+        } catch (e) {
+            console.error('Error parsing SFEN:', e);
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to parse SFEN: ' + e.message
+            });
+        }
+    }
+
+    if (!sg) {
+        sg = Shogiground();
+        sg.attach({
+            board: document.getElementById('dirty'),
+        });
+        sg.attach({
+            hands: {
+                bottom: document.getElementById('hand-bottom'),
+            },
+        });
+        sg.attach({
+            hands: {
+                top: document.getElementById('hand-top'),
+            },
+        });
+    }
+    sg.set(config);
+    updateBoardInfo();
+}
+
+// Update board information display
+function updateBoardInfo() {
+    if (!sg || !sg.state) return;
+    
+    // Get turn from state
+    const turn = sg.state.turnColor === 'sente' ? 'Sente' : 'Gote';
+    $('#turn-text').text(`${turn} to move`);
+    
+    // Display info about the board
+    const sfenInput = $('#puzzle-sfen').val().trim();
+    if (sfenInput) {
+        $('#board-info').text(`SFEN: ${sfenInput}`);
+    } else {
+        $('#board-info').text('Initial position (or enter SFEN above)');
+    }
+}
+
+// Handle square selection to select candidate sequences
+function handleSquareSelect(square) {
+    if (!square || !allSequences || allSequences.length === 0) return;
+    
+    // Find which candidate's first move ends at this square
+    for (let i = 0; i < allSequences.length; i++) {
+        const sequence = allSequences[i];
+        if (!sequence || sequence.length === 0) continue;
+        
+        const firstMove = sequence[0];
+        const usi = firstMove.usi;
+        
+        if (!usi || usi.length < 3) continue;
+        
+        let destSquare = null;
+        
+        // Check if it's a drop move
+        if (usi.includes('*')) {
+            destSquare = usi.substring(2);
+        } else {
+            // Regular move: from orig to dest
+            destSquare = usi.substring(2, 4);
+        }
+        
+        // If this candidate's first move ends at the selected square
+        if (destSquare === square) {
+            // Select this candidate
+            displayedSequenceIndex = i;
+            
+            // Update the sequence selector dropdown
+            const selector = $('#sequence-selector');
+            if (selector.length) {
+                selector.val(i);
+            }
+            
+            // Display the selected sequence
+            displaySequence(allSequences[i]);
+            break;
+        }
+    }
+}
+
+// Handle board move event — capture blunder move if in capture mode
+function handleBoardMove(orig, dest, prom, captured) {
+    if (!isCapturingBlunder) return;
+
+    const usi = orig + dest + (prom ? '+' : '');
+    finishBlunderCapture(usi);
+}
+
+// Handle board drop event — capture blunder move if in capture mode
+function handleBoardDrop(piece, key, prom) {
+    if (!isCapturingBlunder) return;
+
+    const roleMap = {
+        'pawn': 'P', 'lance': 'L', 'knight': 'N', 'silver': 'S',
+        'gold': 'G', 'bishop': 'B', 'rook': 'R'
+    };
+    const pieceChar = roleMap[piece.role] || piece.role.charAt(0).toUpperCase();
+    const usi = pieceChar + '*' + key;
+    finishBlunderCapture(usi);
+}
+
+// Finish blunder capture: add USI, reset board, exit capture mode
+function finishBlunderCapture(usi) {
+    isCapturingBlunder = false;
+    blunderMoves.push(usi);
+
+    // Reset board to puzzle SFEN
+    const sfen = $('#puzzle-sfen').val().trim();
+    initBoard(sfen || null);
+
+    renderBlunderMovesUI();
+    if (arrowsVisible && allSequences.length > 0) {
+        displayCandidateArrows();
+    }
+
+    Swal.fire({
+        icon: 'success',
+        title: 'Blunder Move Added',
+        text: usi,
+        timer: 1200,
+        showConfirmButton: false
+    });
+}
+
+// Load a puzzle into the editor
+function loadPuzzle(puzzle, showToast) {
+    if (showToast === undefined) showToast = true;
+
+    currentPuzzleId = puzzle._id.$oid;
+    $('#puzzle-name').val(puzzle.name);
+    $('#puzzle-sfen').val(puzzle.sfen || '');
+    $('#puzzle-comments').val(puzzle.comments || '');
+    $('#puzzle-public').prop('checked', puzzle.is_public || false);
+
+    // Load prelude fields
+    const preludeVal = puzzle.prelude || '';
+    const rootSfenVal = puzzle.root_sfen || '';
+    $('#puzzle-prelude').val(preludeVal);
+    $('#puzzle-root-sfen').val(rootSfenVal);
+    // play_prelude: if explicitly false → unchecked; if true or missing but has prelude → checked
+    const pp = puzzle.play_prelude;
+    $('#puzzle-play-prelude').prop('checked', pp === true || (pp == null && preludeVal.trim().length > 0));
+    renderPreludeVisual();
+
+    // Load move comments if available
+    if (puzzle.move_comments) {
+        loadMoveComments(puzzle.move_comments);
+    } else {
+        moveComments = {}; // Reset comments
+    }
+
+    // Load blunder moves if available
+    if (puzzle.blunder_moves && Array.isArray(puzzle.blunder_moves)) {
+        blunderMoves = puzzle.blunder_moves.slice();
+    } else {
+        blunderMoves = [];
+    }
+    renderBlunderMovesUI();
+
+    // Load tags if available
+    if (puzzle.tags && Array.isArray(puzzle.tags)) {
+        tags = puzzle.tags.slice();
+    } else {
+        tags = [];
+    }
+    renderTagsUI();
+
+    // Reinitialize board with the puzzle's SFEN
+    initBoard(puzzle.sfen);
+
+    // Restore analysis data if available (no engine call needed)
+    if (puzzle.analysis_data && puzzle.analysis_data.length > 0) {
+        try {
+            allSequences = JSON.parse(puzzle.analysis_data);
+            // Tag existing sequences as best if not already tagged
+            allSequences.forEach(seq => {
+                if (seq.length > 0 && !seq[0]._type) {
+                    seq[0]._type = 'best';
+                }
+            });
+            displayedSequenceIndex = 0;
+            initialSfen = puzzle.sfen || '';
+            // Restore selected candidate indices or default to first N
+            if (puzzle.selected_candidates && Array.isArray(puzzle.selected_candidates)) {
+                selectedCandidateIndices = puzzle.selected_candidates.map(v => typeof v === 'number' ? v : parseInt(v));
+            } else {
+                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, allSequences.length));
+            }
+
+            // Restore blunder analyses and append to allSequences
+            const blunderAnalysesStr = puzzle.blunder_analyses;
+            if (blunderAnalysesStr && blunderAnalysesStr.length > 0) {
+                try {
+                    const blunderData = JSON.parse(blunderAnalysesStr);
+                    window.blunderAnalyses = blunderData;
+                    if (Array.isArray(blunderData)) {
+                        blunderData.forEach((ba, bIdx) => {
+                            if (ba.sequence && ba.sequence.length > 0) {
+                                // Tag as blunder
+                                ba.sequence[0]._type = 'blunder';
+                                ba.sequence[0]._blunderMove = ba.blunder;
+                                ba.sequence[0]._blunderIndex = bIdx;
+                                allSequences.push(ba.sequence);
+                                // Auto-select blunder sequences
+                                selectedCandidateIndices.push(allSequences.length - 1);
+                            }
+                        });
+                    }
+                } catch (e) {
+                    console.error('[PUZZLE-CREATOR] Failed to parse blunder_analyses:', e);
+                }
+            }
+
+            // Display the sequence directly — arrows, playback controls, comments
+            setTimeout(() => {
+                displaySequence(allSequences[displayedSequenceIndex]);
+            }, 100);
+        } catch (e) {
+            console.error('[PUZZLE-CREATOR] Failed to parse analysis_data:', e);
+        }
+    } else if (puzzle.selected_sequence && puzzle.selected_sequence.length > 0) {
+        // Backward compat: build minimal sequence objects from USI strings (no scores)
+        initialSfen = puzzle.sfen || '';
+        const minimalSequence = puzzle.selected_sequence.map((usi, index) => ({
+            moveNum: index + 1,
+            usi: usi,
+            score: null,
+            depth: 0,
+            sfenBefore: '',
+            pv: ''
+        }));
+        allSequences = [minimalSequence];
+        displayedSequenceIndex = 0;
+        setTimeout(() => {
+            displaySequence(allSequences[displayedSequenceIndex]);
+        }, 100);
+    }
+
+    if (showToast) {
+        Swal.fire({
+            icon: 'success',
+            title: 'Puzzle Loaded',
+            text: `Loaded puzzle: ${puzzle.name}`,
+            timer: 1500,
+            showConfirmButton: false
+        });
+    }
+}
+
+// Save puzzle as draft (status = "review")
+function saveDraft() {
+    savePuzzleWithStatus('review');
+}
+
+// Save puzzle (status = "accepted")
+function savePuzzle() {
+    savePuzzleWithStatus('accepted');
+}
+
+function savePuzzleWithStatus(status) {
+    const name = $('#puzzle-name').val().trim();
+    const sfen = $('#puzzle-sfen').val().trim();
+    const comments = $('#puzzle-comments').val().trim();
+    const isPublic = $('#puzzle-public').is(':checked');
+
+    if (!name) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Missing Name',
+            text: 'Please enter a puzzle name.'
+        });
+        return;
+    }
+
+    const urlParams = new URLSearchParams(window.location.search);
+    // Preserve existing source when editing; default to 'custom' for new puzzles
+    const existingSource = (window.__puzzleData && window.__puzzleData.source) || 'custom';
+    const data = {
+        name: name,
+        sfen: sfen || '',
+        comments: comments || '',
+        isPublic: isPublic,
+        status: status,
+        source: currentPuzzleId ? existingSource : 'custom',
+        moveComments: getAllMoveComments(),
+        blunderMoves: blunderMoves,
+        tags: tags,
+        blunderAnalyses: window.blunderAnalyses ? JSON.stringify(window.blunderAnalyses) : null,
+        prelude: $('#puzzle-prelude').val().trim(),
+        rootSfen: $('#puzzle-root-sfen').val().trim(),
+        playPrelude: $('#puzzle-play-prelude').is(':checked'),
+    };
+
+    if (currentPuzzleId) {
+        data.id = currentPuzzleId;
+    }
+
+    // Include selected sequence and full analysis data if available
+    if (allSequences.length > 0 && displayedSequenceIndex >= 0) {
+        // Save only best-move sequences in analysisData (filter out blunder sequences)
+        const bestSequences = allSequences.filter(s => isBestSequence(s));
+        data.analysisData = JSON.stringify(bestSequences);
+
+        // Map selectedCandidateIndices to positions within best-only array
+        const bestOnlyIndices = selectedCandidateIndices
+            .filter(i => isBestSequence(allSequences[i]))
+            .map(origIdx => {
+                // Find position of this sequence in bestSequences
+                let bestIdx = 0;
+                for (let j = 0; j < origIdx; j++) {
+                    if (isBestSequence(allSequences[j])) bestIdx++;
+                }
+                return bestIdx;
+            });
+        if (bestOnlyIndices.length > 0) {
+            data.selectedCandidates = bestOnlyIndices;
+        }
+
+        // Keep selectedSequence for backward compat (use first best sequence)
+        const firstBestIdx = allSequences.findIndex(s => isBestSequence(s));
+        const selectedSeq = firstBestIdx >= 0 ? allSequences[firstBestIdx] : allSequences[0];
+        data.selectedSequence = selectedSeq.map(move => move.usi);
+
+        // Save selected blunder sequences as blunderAnalyses
+        const selectedBlunderSequences = selectedCandidateIndices
+            .filter(i => isBlunderSequence(allSequences[i]))
+            .map(i => {
+                const seq = allSequences[i];
+                return {
+                    blunder: seq[0]._blunderMove || seq[0].usi,
+                    sequence: seq
+                };
+            });
+        if (selectedBlunderSequences.length > 0) {
+            data.blunderAnalyses = JSON.stringify(selectedBlunderSequences);
+        } else if (window.blunderAnalyses) {
+            data.blunderAnalyses = JSON.stringify(window.blunderAnalyses);
+        }
+    }
+
+    $.ajax({
+        url: '/puzzle-creator/save',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(data),
+        success: function(response) {
+            Swal.fire({
+                icon: 'success',
+                title: 'Success',
+                text: response.message,
+                timer: 1500,
+                showConfirmButton: false
+            }).then(() => {
+                window.location.href = getPuzzleListUrl();
+            });
+        },
+        error: function(xhr, status, error) {
+            console.error('Error saving puzzle:', error);
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to save puzzle.'
+            });
+        }
+    });
+}
+
+// Delete puzzle
+function deletePuzzle(puzzleId) {
+    Swal.fire({
+        title: 'Delete Puzzle?',
+        text: 'This action cannot be undone.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Yes, delete it!'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            $.ajax({
+                url: '/puzzle-creator/delete',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({ id: puzzleId }),
+                success: function(response) {
+                    Swal.fire({
+                        icon: 'success',
+                        title: 'Deleted',
+                        text: response.message,
+                        timer: 1500,
+                        showConfirmButton: false
+                    }).then(() => {
+                        window.location.href = getPuzzleListUrl();
+                    });
+                },
+                error: function(xhr, status, error) {
+                    console.error('Error deleting puzzle:', error);
+                    Swal.fire({
+                        icon: 'error',
+                        title: 'Error',
+                        text: 'Failed to delete puzzle.'
+                    });
+                }
+            });
+        }
+    });
+}
+
+// Analyze position with engine and show best moves
+function analyzePosition(multiPv = 3) {
+    const sfenInput = $('#puzzle-sfen').val().trim();
+    const sfen = sfenInput || getCurrentSfen();
+    
+    if (!sfen) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'No Position',
+            text: 'Please enter a SFEN or load a puzzle first.'
+        });
+        return;
+    }
+    
+    // Show loading indicator
+    Swal.fire({
+        title: 'Analyzing...',
+        text: 'Engine is calculating best moves',
+        allowOutsideClick: false,
+        didOpen: () => {
+            Swal.showLoading();
+        }
+    });
+    
+    const depth = parseInt($('#analysis-depth').val()) || 15;
+    const time = parseInt($('#analysis-time').val()) || 0;
+
+    $.ajax({
+        url: '/puzzle-creator/analyze',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            sfen: sfen,
+            multiPv: multiPv,
+            depth: depth,
+            time: time > 0 ? time * 1000 : undefined
+        }),
+        success: function(response) {
+            Swal.close();
+            
+            if (response.success && response.moves && response.moves.length > 0) {
+                displayEngineMoves(response.moves);
+            } else {
+                console.error('[PUZZLE-CREATOR] Analysis failed:', response.error);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Analysis Failed',
+                    text: response.error || 'No moves found'
+                });
+            }
+        },
+        error: function(xhr, status, error) {
+            Swal.close();
+            console.error('Error analyzing position:', error);
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to analyze position. Make sure the engine is configured.'
+            });
+        }
+    });
+}
+
+// Analyze sequence of moves with engine
+function analyzeSequence() {
+    const sfenInput = $('#puzzle-sfen').val().trim();
+    const sfen = sfenInput || getCurrentSfen();
+    
+    if (!sfen) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'No Position',
+            text: 'Please enter a SFEN or load a puzzle first.'
+        });
+        return;
+    }
+    
+    // Get analysis parameters
+    const depth = parseInt($('#analysis-depth').val()) || 15;
+    const time = parseInt($('#analysis-time').val()) || 0;
+    const numMoves = parseInt($('#analysis-moves').val()) || 3;
+    const numCandidates = parseInt($('#analysis-candidates').val()) || 1;
+
+    // Store initial SFEN for sequence playback
+    initialSfen = sfen;
+
+    // Set analyzing state
+    isAnalyzing = true;
+    $('#analyze-sequence').prop('disabled', true);
+    $('#stop-analysis').show();
+
+    // Build description
+    let desc = `depth ${depth}`;
+    if (time > 0) desc += `, ${time}s/move`;
+
+    // Show loading indicator
+    Swal.fire({
+        title: 'Analyzing...',
+        text: `Engine: ${numCandidates} candidate(s), ${numMoves} moves each (${desc})`,
+        allowOutsideClick: false,
+        didOpen: () => {
+            Swal.showLoading();
+        }
+    });
+
+    $.ajax({
+        url: '/puzzle-creator/analyze-sequence',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({
+            sfen: sfen,
+            numMoves: numMoves,
+            multiPv: numCandidates,
+            depth: depth,
+            time: time
+        }),
+        success: function(response) {
+            console.log('[PUZZLE-CREATOR] Sequence analysis response:', response);
+
+            if (response.success && response.sequences && response.sequences.length > 0) {
+                // Tag each returned sequence's first move with _type: 'best'
+                response.sequences.forEach(seq => {
+                    if (seq.length > 0) {
+                        seq[0]._type = 'best';
+                    }
+                });
+
+                // Store best-move sequences
+                allSequences = response.sequences;
+                displayedSequenceIndex = 0;
+                // Auto-select first N best-move candidates (max 3)
+                const bestCount = allSequences.length;
+                selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, bestCount));
+
+
+                // Chain blunder analysis if blunder moves exist
+                if (blunderMoves.length > 0) {
+                    Swal.update({
+                        text: `Analyzing blunder moves (${blunderMoves.length})...`
+                    });
+
+                    $.ajax({
+                        url: '/puzzle-creator/analyze-blunders',
+                        method: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({
+                            sfen: sfen,
+                            blunderMoves: blunderMoves,
+                            depth: depth,
+                            time: time,
+                            numMoves: numMoves
+                        }),
+                        success: function(blunderResponse) {
+                            Swal.close();
+                            isAnalyzing = false;
+                            $('#analyze-sequence').prop('disabled', false);
+                            $('#stop-analysis').hide();
+
+                            if (blunderResponse.success && blunderResponse.blunderAnalyses) {
+                                window.blunderAnalyses = blunderResponse.blunderAnalyses;
+
+                                // Tag each blunder sequence and append to allSequences
+                                blunderResponse.blunderAnalyses.forEach((ba, bIdx) => {
+                                    if (ba.sequence && ba.sequence.length > 0) {
+                                        ba.sequence[0]._type = 'blunder';
+                                        ba.sequence[0]._blunderMove = ba.blunder;
+                                        ba.sequence[0]._blunderIndex = bIdx;
+                                        allSequences.push(ba.sequence);
+                                        // Auto-select all blunder candidates
+                                        selectedCandidateIndices.push(allSequences.length - 1);
+                                    }
+                                });
+                            }
+                            displaySequence(allSequences[displayedSequenceIndex]);
+                        },
+                        error: function(xhr, status, error) {
+                            Swal.close();
+                            isAnalyzing = false;
+                            $('#analyze-sequence').prop('disabled', false);
+                            $('#stop-analysis').hide();
+
+                            console.error('[PUZZLE-CREATOR] Blunder analysis failed:', error);
+                            // Still show best-move results even if blunder analysis fails
+                            displaySequence(allSequences[displayedSequenceIndex]);
+                        }
+                    });
+                } else {
+                    Swal.close();
+                    isAnalyzing = false;
+                    $('#analyze-sequence').prop('disabled', false);
+                    $('#stop-analysis').hide();
+                    displaySequence(allSequences[displayedSequenceIndex]);
+                }
+            } else {
+                Swal.close();
+                isAnalyzing = false;
+                $('#analyze-sequence').prop('disabled', false);
+                $('#stop-analysis').hide();
+
+                console.error('[PUZZLE-CREATOR] Sequence analysis failed:', response.error);
+                Swal.fire({
+                    icon: 'error',
+                    title: 'Analysis Failed',
+                    text: response.error || 'No sequence found'
+                });
+            }
+        },
+        error: function(xhr, status, error) {
+            Swal.close();
+
+            // Reset analyzing state
+            isAnalyzing = false;
+            $('#analyze-sequence').prop('disabled', false);
+            $('#stop-analysis').hide();
+
+            console.error('Error analyzing sequence:', error);
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: 'Failed to analyze sequence. Make sure the engine is configured.'
+            });
+        }
+    });
+}
+
+// Stop analysis
+function stopAnalysis() {
+    // This is a placeholder - in a real implementation, you would need to
+    // communicate with the backend to stop the ongoing analysis
+    // For now, we'll just show a message
+    Swal.fire({
+        icon: 'info',
+        title: 'Stop Analysis',
+        text: 'Analysis stop functionality requires backend support. The current analysis will complete.'
+    });
+}
+
+// Display arrows for first moves of all candidate sequences
+function displayCandidateArrows() {
+    if (!sg || !allSequences || allSequences.length === 0) {
+        return;
+    }
+
+    const autoShapes = [];
+    const bestColors = ['primary', 'alternative1', 'alternative2'];
+
+    // Validate square format (should be like "5e", "7b", etc.)
+    const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
+    const pieceRoleMap = {
+        'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
+        'G': 'gold', 'B': 'bishop', 'R': 'rook'
+    };
+
+    let bestCounter = 0;
+    let blunderCounter = 0;
+    let hasBlunderSequences = false;
+
+    allSequences.forEach((sequence, index) => {
+        if (!sequence || sequence.length === 0) return;
+
+        const firstMove = sequence[0];
+        const usi = firstMove.usi;
+
+        if (!usi || usi.length < 3) return;
+
+        const isBlunder = isBlunderSequence(sequence);
+        let brush, labelText;
+
+        if (isBlunder) {
+            hasBlunderSequences = true;
+            blunderCounter++;
+            brush = 'alternative0'; // red
+            labelText = 'B' + blunderCounter;
+        } else {
+            bestCounter++;
+            brush = bestColors[(bestCounter - 1) % bestColors.length];
+            labelText = bestCounter.toString();
+        }
+
+        if (usi.includes('*')) {
+            const pieceChar = usi.charAt(0);
+            const dest = usi.substring(2);
+            if (!isValidSquare(dest)) return;
+            const role = pieceRoleMap[pieceChar.toUpperCase()] || 'pawn';
+            autoShapes.push({
+                orig: { role: role, color: 'sente' },
+                dest: dest,
+                brush: brush,
+                label: { text: labelText }
+            });
+        } else {
+            const orig = usi.substring(0, 2);
+            const dest = usi.substring(2, 4);
+            if (!isValidSquare(orig) || !isValidSquare(dest)) return;
+            autoShapes.push({
+                orig: orig,
+                dest: dest,
+                brush: brush,
+                label: { text: labelText }
+            });
+        }
+    });
+
+    // Only add standalone blunder arrows if no blunder sequences are in allSequences
+    if (!hasBlunderSequences) {
+        addBlunderArrows(autoShapes);
+    }
+
+    sg.setAutoShapes(autoShapes);
+}
+
+// Display sequence with move numbers and controls
+function displaySequence(sequence) {
+    if (!sg) {
+        console.error('[PUZZLE-CREATOR] sg is not initialized!');
+        return;
+    }
+    
+    // Clear any existing arrows
+    sg.setAutoShapes([]);
+    
+    // Extract moves from sequence
+    currentSequenceMoves = sequence.map(move => move.usi);
+    currentSequenceIndex = -1;
+    
+    // Build sequence display HTML
+    let sequenceHtml = '<div class="mt-3"><h6>Engine Sequence Analysis:</h6>';
+    
+    // Display arrows for first moves of all candidates and set state
+    displayCandidateArrows();
+    arrowsVisible = true;
+    
+    // Add candidate selector if there are multiple sequences
+    if (allSequences.length > 1) {
+        sequenceHtml += '<div class="mb-2">';
+        sequenceHtml += '<label class="form-label text-light">Candidates <small class="text-muted">(check up to 3 best for viewer)</small>:</label>';
+        sequenceHtml += '<div id="candidate-list" class="list-group list-group-flush">';
+
+        let bestCounter = 0;
+        let blunderCounter = 0;
+        allSequences.forEach((seq, index) => {
+            const isBlunder = isBlunderSequence(seq);
+            const isActive = index === displayedSequenceIndex;
+            const isChecked = selectedCandidateIndices.includes(index);
+            // Count how many best-move candidates are checked
+            const bestCheckedCount = selectedCandidateIndices.filter(i => isBestSequence(allSequences[i])).length;
+            const atBestLimit = !isBlunder && bestCheckedCount >= 3 && !isChecked;
+            const score = formatSequenceScore(seq[0].score);
+
+            let label, extraClasses = '', extraStyle = '';
+            if (isBlunder) {
+                blunderCounter++;
+                label = `B${blunderCounter}. ${seq[0].usi} ${score}`;
+                extraClasses = ' text-danger';
+                extraStyle = 'border-left:3px solid #dc3545;';
+            } else {
+                bestCounter++;
+                label = `${bestCounter}. ${seq[0].usi} ${score}`;
+            }
+
+            sequenceHtml += `<div class="list-group-item list-group-item-action d-flex align-items-center p-1 ${isActive ? 'active' : ''}" data-index="${index}" style="background:${isActive ? '#3a3530' : '#2e2a24'};border-color:#444;cursor:pointer;${extraStyle}">`;
+            sequenceHtml += `<input type="checkbox" class="form-check-input me-2 candidate-checkbox" data-index="${index}" data-seq-type="${isBlunder ? 'blunder' : 'best'}" ${isChecked ? 'checked' : ''} ${atBestLimit ? 'disabled' : ''} style="cursor:pointer;">`;
+            sequenceHtml += `<span class="candidate-label small flex-grow-1${extraClasses}">${label}`;
+            if (isBlunder) {
+                sequenceHtml += ' <span class="badge bg-danger">blunder</span>';
+            }
+            sequenceHtml += `</span>`;
+            sequenceHtml += `</div>`;
+        });
+
+        sequenceHtml += '</div>';
+        sequenceHtml += '</div>';
+    }
+    
+    sequenceHtml += '<div class="sequence-moves mb-2">';
+
+    // Only show the candidate move (first move) with its comment
+    const commentKey = `${displayedSequenceIndex}_0`;
+    const defaultComment = sequence.map(m => {
+        const s = formatSequenceScore(m.score);
+        return s ? `${m.usi} (${s})` : m.usi;
+    }).join(' -> ');
+    const savedComment = moveComments[commentKey];
+    const displayComment = (savedComment !== undefined && savedComment !== '') ? savedComment : defaultComment;
+
+    // Use danger styling for blunder sequences, info for best
+    const isDisplayedBlunder = isBlunderSequence(sequence);
+    const commentTextClass = isDisplayedBlunder ? 'text-danger' : 'text-info';
+    const commentBtnClass = isDisplayedBlunder ? 'btn-outline-danger' : 'btn-outline-info';
+
+    sequenceHtml += `<div class="sequence-move mb-2 p-2 bg-dark rounded" data-index="0" data-comment-key="${commentKey}">`;
+    sequenceHtml += `<div class="d-flex justify-content-between align-items-center">`;
+    sequenceHtml += `<div class="move-comment-display small ${commentTextClass} flex-grow-1 me-2" id="comment-display-${commentKey}">${displayComment}</div>`;
+    sequenceHtml += `<div class="btn-group btn-group-sm flex-shrink-0">`;
+    sequenceHtml += `<button class="btn ${commentBtnClass} btn-sm edit-comment-btn" data-comment-key="${commentKey}" title="Edit comment"><i class="bi bi-chat-text"></i></button>`;
+    sequenceHtml += `<button class="btn btn-outline-danger btn-sm delete-comment-btn" data-comment-key="${commentKey}" title="Delete comment"><i class="bi bi-trash"></i></button>`;
+    sequenceHtml += `</div>`;
+    sequenceHtml += `</div>`;
+    sequenceHtml += `</div>`;
+    
+    sequenceHtml += '</div>';
+    
+    // Add playback controls
+    sequenceHtml += `
+        <div class="sequence-controls mt-3">
+            <div class="btn-group btn-group-sm w-100" role="group">
+                <button id="sequence-back" class="btn btn-outline-secondary" title="Previous Move">
+                    <i class="bi bi-skip-start-fill"></i>
+                </button>
+                <button id="sequence-autoplay" class="btn btn-outline-success" title="Autoplay">
+                    <i class="bi bi-play-fill"></i>
+                </button>
+                <button id="sequence-next" class="btn btn-outline-secondary" title="Next Move">
+                    <i class="bi bi-skip-end-fill"></i>
+                </button>
+                <button id="sequence-reset" class="btn btn-outline-warning" title="Reset">
+                    <i class="bi bi-arrow-counterclockwise"></i>
+                </button>
+            </div>
+            <div class="mt-2 text-center">
+                <small class="text-muted" id="sequence-status">Move 0 of ${sequence.length}</small>
+            </div>
+        </div>
+    `;
+    
+    sequenceHtml += '</div>';
+    
+    // Update the feedback area - use ID container to allow both analyses to show
+    const feedbackDiv = $('.puzzle__feedback .content');
+    if (feedbackDiv.length) {
+        feedbackDiv.html(`Engine sequence analysis complete! ${sequence.length} moves found.${sequenceHtml}`);
+    }
+    
+    // Initialize sequence controls
+    initSequenceControls();
+    
+    // Add candidate list handlers if there are multiple sequences
+    if (allSequences.length > 1) {
+        // Row click → switch preview
+        $('#candidate-list .list-group-item').off('click').on('click', function(e) {
+            if ($(e.target).is('.candidate-checkbox')) return; // let checkbox handler deal with it
+            const idx = parseInt($(this).data('index'));
+            displayedSequenceIndex = idx;
+            displaySequence(allSequences[idx]);
+        });
+
+        // Checkbox change → toggle candidate selection
+        $('#candidate-list .candidate-checkbox').off('change').on('change', function(e) {
+            e.stopPropagation();
+            const idx = parseInt($(this).data('index'));
+            if ($(this).is(':checked')) {
+                if (!selectedCandidateIndices.includes(idx)) {
+                    selectedCandidateIndices.push(idx);
+                }
+            } else {
+                selectedCandidateIndices = selectedCandidateIndices.filter(i => i !== idx);
+            }
+            // Enforce max 3 only for best-move checkboxes; blunder checkboxes unrestricted
+            const bestCheckedCount = selectedCandidateIndices.filter(i => isBestSequence(allSequences[i])).length;
+            const atBestLimit = bestCheckedCount >= 3;
+            $('#candidate-list .candidate-checkbox').each(function() {
+                if (!$(this).is(':checked') && $(this).data('seq-type') === 'best') {
+                    $(this).prop('disabled', atBestLimit);
+                }
+            });
+        });
+    }
+}
+
+// Format sequence score
+function formatSequenceScore(score) {
+    if (!score) return '';
+    const kind = score.kind || 'cp';
+    const value = score.value || 0;
+    
+    if (kind === 'mate') {
+        return `M${value}`;
+    } else {
+        return value >= 0 ? `+${value}` : `${value}`;
+    }
+}
+
+// Initialize sequence controls
+function initSequenceControls() {
+    $('#sequence-back').off('click').on('click', function() {
+        stopAutoplay();
+        playBackMove();
+    });
+    
+    $('#sequence-next').off('click').on('click', function() {
+        stopAutoplay();
+        playNextMove();
+    });
+    
+    $('#sequence-autoplay').off('click').on('click', function() {
+        if (autoplayInterval) {
+            stopAutoplay();
+        } else {
+            if (currentSequenceIndex >= currentSequenceMoves.length - 1) {
+                // Restart if at end
+                initSequence(currentSequenceMoves.join(' '));
+            }
+            startAutoplay();
+        }
+    });
+    
+    $('#sequence-reset').off('click').on('click', function() {
+        stopAutoplay();
+        initSequence(currentSequenceMoves.join(' '));
+        clearArrows();
+    });
+    
+    // Edit comment button handlers
+    $('.edit-comment-btn').off('click').on('click', function() {
+        const commentKey = $(this).data('comment-key');
+        editMoveComment(commentKey);
+    });
+    
+    // Delete comment button handlers
+    $('.delete-comment-btn').off('click').on('click', function() {
+        const commentKey = $(this).data('comment-key');
+        deleteMoveComment(commentKey);
+    });
+    
+    updateSequenceControls();
+}
+
+// Edit move comment
+function editMoveComment(commentKey) {
+    const currentComment = moveComments[commentKey] || '';
+    const displayEl = $(`#comment-display-${commentKey}`);
+    const currentText = displayEl.text();
+
+    Swal.fire({
+        title: 'Edit Move Comment',
+        input: 'textarea',
+        inputValue: currentComment || currentText,
+        inputPlaceholder: 'Enter comment for this move...',
+        showCancelButton: true,
+        confirmButtonText: 'Save',
+        cancelButtonText: 'Cancel',
+        inputValidator: (value) => {
+            return null; // Allow any value including empty
+        }
+    }).then((result) => {
+        if (result.isConfirmed) {
+            const newComment = result.value || '';
+            moveComments[commentKey] = newComment;
+            
+            // Update display - show comment or default score
+            if (newComment.trim() !== '') {
+                displayEl.text(newComment);
+            } else {
+                // If comment is empty, show default score
+                const parts = commentKey.split('_');
+                const moveIndex = parseInt(parts[1]);
+                if (allSequences[displayedSequenceIndex] && allSequences[displayedSequenceIndex][moveIndex]) {
+                    const score = formatSequenceScore(allSequences[displayedSequenceIndex][moveIndex].score);
+                    displayEl.text(score);
+                }
+            }
+            
+            displayEl.addClass('text-info');
+            
+            Swal.fire({
+                icon: 'success',
+                title: 'Comment Saved',
+                timer: 1000,
+                showConfirmButton: false
+            });
+        }
+    });
+}
+
+// Delete move comment
+function deleteMoveComment(commentKey) {
+    const currentComment = moveComments[commentKey];
+    
+    if (currentComment === undefined || currentComment === '') {
+        Swal.fire({
+            icon: 'info',
+            title: 'No Comment',
+            text: 'There is no comment to delete for this move.',
+            timer: 1500,
+            showConfirmButton: false
+        });
+        return;
+    }
+    
+    Swal.fire({
+        title: 'Delete Comment?',
+        text: 'This will remove the comment and show the default CP score.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Yes, delete it!'
+    }).then((result) => {
+        if (result.isConfirmed) {
+            delete moveComments[commentKey];
+            
+            // Reset display to default score
+            const displayEl = $(`#comment-display-${commentKey}`);
+            const parts = commentKey.split('_');
+            const moveIndex = parseInt(parts[1]);
+            if (allSequences[displayedSequenceIndex] && allSequences[displayedSequenceIndex][moveIndex]) {
+                const score = formatSequenceScore(allSequences[displayedSequenceIndex][moveIndex].score);
+                displayEl.text(score);
+            }
+            
+            Swal.fire({
+                icon: 'success',
+                title: 'Comment Deleted',
+                timer: 1000,
+                showConfirmButton: false
+            });
+        }
+    });
+}
+
+// Get all move comments for saving
+function getAllMoveComments() {
+    return moveComments;
+}
+
+// Load move comments from saved data
+function loadMoveComments(comments) {
+    if (comments && typeof comments === 'object') {
+        // Handle MongoDB Document format - convert to plain object
+        moveComments = {};
+        Object.keys(comments).forEach(key => {
+            moveComments[key] = comments[key];
+        });
+    } else {
+        moveComments = {};
+    }
+}
+
+// Update sequence controls state
+function updateSequenceControls() {
+    $('#sequence-back').prop('disabled', currentSequenceIndex < 0);
+    $('#sequence-next').prop('disabled', currentSequenceIndex >= currentSequenceMoves.length - 1);
+    $('#sequence-status').text(`Move ${currentSequenceIndex + 1} of ${currentSequenceMoves.length}`);
+}
+
+// Stop autoplay
+function stopAutoplay() {
+    if (autoplayInterval) {
+        clearInterval(autoplayInterval);
+        autoplayInterval = null;
+    }
+    $('#sequence-autoplay').html('<i class="bi bi-play-fill"></i>').removeClass('btn-success').addClass('btn-outline-success');
+}
+
+// Start autoplay
+function startAutoplay() {
+    if (autoplayInterval) return;
+    
+    $('#sequence-autoplay').html('<i class="bi bi-pause-fill"></i>').removeClass('btn-outline-success').addClass('btn-success');
+    
+    autoplayInterval = setInterval(() => {
+        // Only stop if we've reached the end of the sequence
+        if (currentSequenceIndex >= currentSequenceMoves.length - 1) {
+            stopAutoplay();
+        } else {
+            playNextMove();
+        }
+    }, 1000);
+}
+
+// Play next move in sequence
+function playNextMove() {
+    if (currentSequenceIndex < currentSequenceMoves.length - 1) {
+        currentSequenceIndex++;
+        const moveUsi = currentSequenceMoves[currentSequenceIndex];
+        
+        // Enable animation for single step forward
+        sg.set({ animation: { enabled: true } });
+        
+        applyMove(moveUsi, currentSequenceIndex, true);
+        
+        // Clear arrows after first move is played
+        if (currentSequenceIndex === 0) {
+            sg.setAutoShapes([]);
+        }
+        
+        updateSequenceControls();
+        return true;
+    }
+    stopAutoplay();
+    return false;
+}
+
+// Play back to previous move in sequence
+function playBackMove() {
+    if (currentSequenceIndex >= 0) {
+        currentSequenceIndex--;
+        
+        // Temporarily disable animation for the entire playback process
+        const wasAnimationEnabled = sg.state.animation.enabled;
+        sg.set({ animation: { enabled: false } });
+
+        // Re-render board to initial state
+        sg.set({
+            sfen: {
+                board: initialSfen.split(' ')[0],
+                hands: initialSfen.split(' ').length > 2 ? initialSfen.split(' ')[2] : '',
+            },
+            turnColor: initialSfen.split(' ')[1] === 'b' ? 'sente' : 'gote',
+            animation: { enabled: false }
+        });
+        
+        // Play moves up to current index without animation
+        for (let i = 0; i <= currentSequenceIndex; i++) {
+            applyMove(currentSequenceMoves[i], i, false);
+        }
+        
+        // Restore animation setting
+        sg.set({ animation: { enabled: wasAnimationEnabled } });
+        
+        updateSequenceControls();
+    }
+}
+
+// Initialize sequence playback
+function initSequence(usiString, showArrows = true) {
+    if (!usiString) return;
+    currentSequenceMoves = usiString.split(' ');
+    currentSequenceIndex = -1;
+    
+    isPlayingSequence = true;
+    stopAutoplay();
+    
+    // Clear any existing arrows first
+    sg.setAutoShapes([]);
+    
+    // Reset board to initial state
+    sg.set({
+        sfen: {
+            board: initialSfen.split(' ')[0],
+            hands: initialSfen.split(' ').length > 2 ? initialSfen.split(' ')[2] : '',
+        },
+        turnColor: initialSfen.split(' ')[1] === 'b' ? 'sente' : 'gote',
+        animation: { enabled: false },
+        lastDest: undefined,
+        lastMove: undefined,
+        lastDests: []
+    });
+    
+    // Reset turn color and movable state to ensure clean start
+    sg.set({ animation: { enabled: true } });
+    
+    updateSequenceControls();
+    
+    // Only display arrows if requested
+    if (showArrows && allSequences.length > 0) {
+        displayCandidateArrows();
+    }
+}
+
+// Apply move to board
+function applyMove(moveUsi, index, animate = true) {
+    if (!sg) return;
+
+    // Determine whose turn it is based on the move index
+    const isInitialPlayerTurn = (index % 2 === 0);
+    const initialTurn = initialSfen.split(' ')[1] === 'b' ? 'sente' : 'gote';
+    const opponentColor = initialTurn === 'sente' ? 'gote' : 'sente';
+    const currentColor = isInitialPlayerTurn ? initialTurn : opponentColor;
+
+    // Force piece count in hand if it's a drop to avoid Shogiground blocking it
+    if (moveUsi.includes('*')) {
+        const roleStr = moveUsi[0].toLowerCase();
+        // Convert USI role to Shogiground role
+        const roleMap = {
+            'r': 'rook', 'b': 'bishop', 'g': 'gold', 's': 'silver', 
+            'n': 'knight', 'l': 'lance', 'p': 'pawn'
+        };
+        const role = roleMap[roleStr] || roleStr;
+        const dest = moveUsi.substring(2);
+
+        const hand = sg.state.hands.handMap.get(currentColor);
+        const count = hand ? (hand.get(role) || 0) : 0;
+        
+        if (count <= 0) {
+            console.warn(`[SEQUENCE] Piece ${role} not found in ${currentColor} hand. Forcing add to allow drop.`);
+            sg.addToHand({role, color: currentColor}, 1);
+        }
+        
+        sg.set({ turnColor: currentColor });
+        sg.drop({ role, color: currentColor }, dest, false, true);
+        
+        // Ensure piece is removed from hand after drop
+        sg.removeFromHand({ role, color: currentColor }, 1);
+    } else {
+        const orig = moveUsi.substring(0, 2);
+        const dest = moveUsi.substring(2, 4);
+        const prom = moveUsi.endsWith('+');
+        
+        sg.set({ turnColor: currentColor });
+        
+        // Check for capture before move
+        const capturedPiece = sg.state.pieces.get(dest);
+        
+        sg.move(orig, dest, prom);
+
+        if (capturedPiece) {
+            // In Shogi, captured piece changes color and goes to capturer's hand
+            // We need to unpromote it if it was promoted
+            const unpromotedRole = Shogiops.variantUtil.unpromote("standard")(capturedPiece.role) || capturedPiece.role;
+            sg.addToHand({ role: unpromotedRole, color: currentColor }, 1);
+        }
+    }
+    
+    // Toggle turn color for next potential interaction
+    const oppositeColor = currentColor === 'sente' ? 'gote' : 'sente';
+    sg.set({ turnColor: oppositeColor });
+}
+
+// Display engine moves as arrows on the board
+function displayEngineMoves(moves) {
+    if (!sg) {
+        console.error('[PUZZLE-CREATOR] sg is not initialized!');
+        return;
+    }
+    
+    const autoShapes = [];
+    const colors = ['primary', 'alternative1', 'alternative2', 'alternative0'];
+    
+    moves.forEach((move, index) => {
+        const usi = move.usi;
+        if (!usi || usi.length < 3) {
+            console.warn(`[PUZZLE-CREATOR] Skipping move ${index} - invalid USI:`, usi);
+            return;
+        }
+        
+        const color = colors[index % colors.length];
+        
+        // Validate square format (should be like "5e", "7b", etc.)
+        const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
+        
+        // Check if it's a drop move (format: P*5e or P*7b)
+        if (usi.includes('*')) {
+            const pieceChar = usi.charAt(0);
+            const dest = usi.substring(2);  // Get everything after P*
+            
+            if (!isValidSquare(dest)) {
+                console.warn(`[PUZZLE-CREATOR] Skipping drop move - invalid destination: '${dest}'`);
+                return;
+            }
+            
+            // Map piece character to role name
+            const pieceRoleMap = {
+                'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
+                'G': 'gold', 'B': 'bishop', 'R': 'rook'
+            };
+            const role = pieceRoleMap[pieceChar.toUpperCase()] || 'pawn';
+            
+            // For drops, use orig as piece descriptor and dest as target square
+            autoShapes.push({
+                orig: {
+                    role: role,
+                    color: 'sente'  // Assuming sente for now
+                },
+                dest: dest,
+                brush: color,
+                label: {
+                    text: (index + 1).toString()
+                }
+            });
+        } else {
+            // Regular move: from orig to dest
+            const orig = usi.substring(0, 2);
+            const dest = usi.substring(2, 4);
+
+            if (!isValidSquare(orig) || !isValidSquare(dest)) {
+                console.warn(`[PUZZLE-CREATOR] Skipping regular move - invalid squares: orig='${orig}', dest='${dest}'`);
+                return;
+            }
+            
+            // Add arrow from origin to destination
+            autoShapes.push({
+                orig: orig,
+                dest: dest,
+                brush: color,
+                label: {
+                    text: (index + 1).toString()
+                }
+            });
+        }
+    });
+    
+    // Set auto shapes on the board
+    try {
+        sg.setAutoShapes(autoShapes);
+    } catch (e) {
+        console.error('[PUZZLE-CREATOR] Error setting autoShapes:', e);
+        console.error('[PUZZLE-CREATOR] Problematic shapes:', autoShapes);
+    }
+    
+    // Show move info
+    let moveInfoHtml = '<div class="mt-3"><h6>Engine Analysis:</h6>';
+    moves.forEach((move, index) => {
+        const score = move.score !== undefined ? formatScore(move.score) : '';
+        const depth = move.depth || '';
+        moveInfoHtml += `<div class="mb-1"><strong>${index + 1}.</strong> ${move.usi} ${score} (depth: ${depth})</div>`;
+    });
+    moveInfoHtml += '</div>';
+    
+    // Update the feedback area
+    const feedbackDiv = $('.puzzle__feedback .content');
+    if (feedbackDiv.length) {
+        feedbackDiv.html(`Engine analysis complete! ${moves.length} best moves shown.<button class="btn btn-sm btn-outline-secondary ms-2" onclick="clearArrows()">Clear</button>${moveInfoHtml}`);
+    }
+}
+
+// Clear arrows from board
+function clearArrows() {
+    if (sg) {
+        sg.setAutoShapes([]);
+        sg.set({
+            selected: undefined,
+            selectedPiece: undefined,
+            lastDest: undefined,
+            lastMove: undefined,
+            lastDests: []
+        });
+    }
+    updateBoardInfo();
+}
+
+// Format engine score
+function formatScore(score) {
+    if (!score) return '';
+    
+    // Handle object format {kind: 'cp', value: 100}
+    if (typeof score === 'object' && score !== null) {
+        const kind = score.kind;
+        const value = score.value;
+        
+        if (kind === 'mate') {
+            return `M${value}`;
+        } else if (kind === 'cp' || typeof value === 'number') {
+            return value >= 0 ? `+${value}` : `${value}`;
+        }
+        return '';
+    }
+    
+    // Handle legacy formats
+    if (score === 'mate') return '#';
+    if (typeof score === 'number') {
+        return score >= 0 ? `+${score}` : `${score}`;
+    }
+    return score.toString();
+}
+
+// Get current SFEN from board state
+function getCurrentSfen() {
+    if (!sg || !sg.state) return null;
+    
+    try {
+        // Build SFEN from current board state
+        const board = sg.state.pieces;
+        const turnColor = sg.state.turnColor === 'sente' ? 'b' : 'w';
+        
+        // Build board string (rank 9 to 1)
+        let boardSfen = '';
+        for (let rank = 9; rank >= 1; rank--) {
+            let emptyCount = 0;
+            for (let file = 9; file >= 1; file--) {
+                const square = `${file}${rank}`;
+                const piece = board.get(square);
+                if (piece) {
+                    if (emptyCount > 0) {
+                        boardSfen += emptyCount.toString();
+                        emptyCount = 0;
+                    }
+                    boardSfen += pieceToSfen(piece);
+                } else {
+                    emptyCount++;
+                }
+            }
+            if (emptyCount > 0) {
+                boardSfen += emptyCount.toString();
+            }
+            if (rank > 1) {
+                boardSfen += '/';
+            }
+        }
+        
+        return `${boardSfen} ${turnColor} - 1`;
+    } catch (e) {
+        console.error('Error getting SFEN:', e);
+        return null;
+    }
+}
+
+// Convert piece to SFEN notation
+function pieceToSfen(piece) {
+    const roleMap = {
+        'king': 'K',
+        'rook': 'R',
+        'bishop': 'B',
+        'gold': 'G',
+        'silver': 'S',
+        'knight': 'N',
+        'lance': 'L',
+        'pawn': 'P',
+        'promotedRook': 'R',
+        'promotedBishop': 'B',
+        'promotedSilver': 'S',
+        'promotedKnight': 'N',
+        'promotedLance': '+L',
+        'promotedPawn': '+P'
+    };
+    
+    let role = roleMap[piece.role] || piece.role.charAt(0).toUpperCase();
+    return piece.color === 'sente' ? role.toLowerCase() : role.toUpperCase();
+}
+
+// Add blunder move arrows (red) to an autoShapes array
+function addBlunderArrows(autoShapes) {
+    if (!blunderMoves || blunderMoves.length === 0) return;
+
+    const isValidSquare = (sq) => sq && sq.length === 2 && /^[1-9][a-i]$/.test(sq);
+    const pieceRoleMap = {
+        'P': 'pawn', 'L': 'lance', 'N': 'knight', 'S': 'silver',
+        'G': 'gold', 'B': 'bishop', 'R': 'rook'
+    };
+
+    blunderMoves.forEach((usi) => {
+        if (!usi || usi.length < 3) return;
+
+        if (usi.includes('*')) {
+            const pieceChar = usi.charAt(0);
+            const dest = usi.substring(2);
+            if (!isValidSquare(dest)) return;
+            const role = pieceRoleMap[pieceChar.toUpperCase()] || 'pawn';
+            autoShapes.push({
+                orig: { role: role, color: 'sente' },
+                dest: dest,
+                brush: 'alternative0',
+                label: { text: 'X' }
+            });
+        } else {
+            const orig = usi.substring(0, 2);
+            const dest = usi.substring(2, 4);
+            if (!isValidSquare(orig) || !isValidSquare(dest)) return;
+            autoShapes.push({
+                orig: orig,
+                dest: dest,
+                brush: 'alternative0',
+                label: { text: 'X' }
+            });
+        }
+    });
+}
+
+// Render the blunder moves UI section in the controls panel
+function renderBlunderMovesUI() {
+    // Remove existing blunder UI if any
+    $('#blunder-moves-section').remove();
+
+    const section = $('<div id="blunder-moves-section" class="row g-2 mb-3"></div>');
+    const col = $('<div class="col-12"></div>');
+    col.append('<label class="form-label text-light">Blunder Moves</label>');
+
+    // Input row
+    const inputRow = $('<div class="d-flex gap-2 mb-2"></div>');
+    inputRow.append('<input type="text" class="form-control form-control-sm" id="blunder-move-input" placeholder="USI (e.g. 7g7f or P*5e)">');
+    inputRow.append('<button class="btn btn-danger btn-sm" id="add-blunder-move" title="Add typed USI"><i class="bi bi-plus-lg"></i></button>');
+    inputRow.append('<button class="btn btn-outline-warning btn-sm" id="pick-blunder-move" title="Pick move from board"><i class="bi bi-hand-index"></i> Board</button>');
+    col.append(inputRow);
+
+    // Capture mode indicator
+    if (isCapturingBlunder) {
+        col.append('<div class="alert alert-warning py-1 px-2 mb-2 small" id="capture-indicator"><i class="bi bi-hand-index me-1"></i>Make a move on the board to capture it as blunder move. <a href="#" id="cancel-capture">Cancel</a></div>');
+    }
+
+    // List of current blunder moves
+    const list = $('<div id="blunder-moves-list"></div>');
+    blunderMoves.forEach((usi, index) => {
+        const item = $(`<div class="d-flex align-items-center gap-2 mb-1"></div>`);
+        item.append(`<span class="badge bg-danger">${usi}</span>`);
+        item.append(`<button class="btn btn-outline-danger btn-sm remove-blunder-move" data-index="${index}"><i class="bi bi-x"></i></button>`);
+        list.append(item);
+    });
+    col.append(list);
+
+    section.append(col);
+
+    // Insert after the comments textarea row
+    $('#puzzle-comments').closest('.row').after(section);
+
+    // Bind events
+    $('#add-blunder-move').off('click').on('click', function() {
+        const usi = $('#blunder-move-input').val().trim();
+        if (!usi) return;
+        blunderMoves.push(usi);
+        $('#blunder-move-input').val('');
+        renderBlunderMovesUI();
+        if (arrowsVisible && allSequences.length > 0) {
+            displayCandidateArrows();
+        }
+    });
+
+    // Pick from board button
+    $('#pick-blunder-move').off('click').on('click', function() {
+        isCapturingBlunder = true;
+        renderBlunderMovesUI();
+    });
+
+    // Cancel capture mode
+    $('#cancel-capture').off('click').on('click', function(e) {
+        e.preventDefault();
+        isCapturingBlunder = false;
+        renderBlunderMovesUI();
+    });
+
+    // Allow Enter key in the input
+    $('#blunder-move-input').off('keydown').on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('#add-blunder-move').click();
+        }
+    });
+
+    $('.remove-blunder-move').off('click').on('click', function() {
+        const idx = parseInt($(this).data('index'));
+        blunderMoves.splice(idx, 1);
+        renderBlunderMovesUI();
+        if (arrowsVisible && allSequences.length > 0) {
+            displayCandidateArrows();
+        }
+    });
+}
+
+// Render the tags UI section in the controls panel
+function renderTagsUI() {
+    // Remove existing tags UI if any
+    $('#tags-section').remove();
+
+    const section = $('<div id="tags-section" class="row g-2 mb-3"></div>');
+    const col = $('<div class="col-12"></div>');
+    col.append('<label class="form-label text-light">Tags</label>');
+
+    // Input row
+    const inputRow = $('<div class="d-flex gap-2 mb-2"></div>');
+    inputRow.append('<input type="text" class="form-control form-control-sm" id="tag-input" placeholder="e.g. strategy, endgame, sacrifice">');
+    inputRow.append('<button class="btn btn-info btn-sm" id="add-tag" title="Add tag"><i class="bi bi-plus-lg"></i></button>');
+    col.append(inputRow);
+
+    // List of current tags as badges
+    const list = $('<div id="tags-list" class="d-flex flex-wrap gap-1"></div>');
+    tags.forEach((tag, index) => {
+        const badge = $(`<span class="badge bg-info text-dark d-flex align-items-center gap-1" style="font-size:0.85em;">${tag}<button class="btn-close btn-close-sm remove-tag" data-index="${index}" style="font-size:0.5em;"></button></span>`);
+        list.append(badge);
+    });
+    col.append(list);
+
+    section.append(col);
+
+    // Insert after the blunder moves section, or after comments if blunder section doesn't exist
+    const blunderSection = $('#blunder-moves-section');
+    if (blunderSection.length) {
+        blunderSection.after(section);
+    } else {
+        $('#puzzle-comments').closest('.row').after(section);
+    }
+
+    // Bind events
+    $('#add-tag').off('click').on('click', function() {
+        const val = $('#tag-input').val().trim();
+        if (!val) return;
+        // Support comma-separated input
+        val.split(',').forEach(t => {
+            const trimmed = t.trim();
+            if (trimmed && !tags.includes(trimmed)) {
+                tags.push(trimmed);
+            }
+        });
+        $('#tag-input').val('');
+        renderTagsUI();
+    });
+
+    // Allow Enter key in the input
+    $('#tag-input').off('keydown').on('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            $('#add-tag').click();
+        }
+    });
+
+    $('.remove-tag').off('click').on('click', function() {
+        const idx = parseInt($(this).data('index'));
+        tags.splice(idx, 1);
+        renderTagsUI();
+    });
+}
+
+// Initialize on page load
+$(document).ready(function() {
+    // Check if we have pre-loaded puzzle data (edit mode)
+    if (window.__puzzleData) {
+        loadPuzzle(window.__puzzleData, false);
+    } else {
+        // Check URL params for study review link
+        const urlParams = new URLSearchParams(window.location.search);
+        const sfenParam = urlParams.get('sfen');
+        const blunderParam = urlParams.get('blunder');
+        const commentParam = urlParams.get('comment');
+        const preludeParam = urlParams.get('prelude');
+        const rootSfenParam = urlParams.get('rootSfen');
+
+        if (blunderParam) blunderMoves = [blunderParam];
+        if (commentParam) $('#puzzle-name').val(commentParam);
+
+        // Populate prelude UI from URL params
+        if (preludeParam) {
+            $('#puzzle-prelude').val(preludeParam);
+            $('#puzzle-play-prelude').prop('checked', true);
+        }
+        if (rootSfenParam) {
+            $('#puzzle-root-sfen').val(rootSfenParam);
+        }
+        renderPreludeVisual();
+
+        if (sfenParam) {
+            $('#puzzle-sfen').val(sfenParam);
+            _preludeSfenAfter = sfenParam;
+            const usis = preludeParam ? preludeParam.trim().split(' ').filter(Boolean) : [];
+            if (usis.length && rootSfenParam) {
+                initBoard(rootSfenParam);
+                startPrelude(usis, rootSfenParam, () => {
+                    initialSfen = sfenParam;
+                    initBoard(sfenParam);
+                    renderBlunderMovesUI();
+                    renderTagsUI();
+                });
+            } else {
+                initBoard(sfenParam);
+                renderBlunderMovesUI();
+                renderTagsUI();
+            }
+        } else {
+            initBoard();
+            renderBlunderMovesUI();
+            renderTagsUI();
+        }
+    }
+
+    // Prelude: update visual badges when input changes
+    $('#puzzle-prelude').on('input', function() {
+        renderPreludeVisual();
+    });
+
+    // Prelude: preview button — play the prelude animation on the board
+    $('#preview-prelude').on('click', function() {
+        const prelude = $('#puzzle-prelude').val().trim();
+        const rootSfen = $('#puzzle-root-sfen').val().trim();
+        const puzzleSfen = $('#puzzle-sfen').val().trim();
+
+        if (!prelude) {
+            Swal.fire({ icon: 'info', title: 'No Prelude', text: 'No prelude moves defined.', timer: 1500, showConfirmButton: false });
+            return;
+        }
+
+        const usis = prelude.split(' ').filter(Boolean);
+        const startSfen = rootSfen || 'lnsgkgsnl/1r5b1/ppppppppp/9/9/PPPPPPPPP/1B5R1/LNSGKGSNL b - 1';
+
+        initBoard(startSfen);
+        startPrelude(usis, startSfen, () => {
+            initialSfen = puzzleSfen || startSfen;
+            if (puzzleSfen) initBoard(puzzleSfen);
+            renderBlunderMovesUI();
+            if (arrowsVisible && allSequences.length > 0) displayCandidateArrows();
+        });
+    });
+
+    // Save button handlers
+    $('#save-puzzle').on('click', savePuzzle);
+    $('#save-draft').on('click', saveDraft);
+    
+    // Analyze buttons
+    $('#analyze-sequence').on('click', function() {
+        analyzeSequence();
+    });
+
+    $('#stop-analysis').on('click', function() {
+        stopAnalysis();
+    });
+    
+    // Toggle arrows and reset button
+    $('#toggle-arrows').on('click', function() {
+        // Toggle the arrow visibility state
+        arrowsVisible = !arrowsVisible;
+        
+        // Reset to beginning position
+        if (initialSfen && allSequences.length > 0) {
+            initSequence(currentSequenceMoves.join(' '), arrowsVisible);
+        }
+    });
+    
+    // Update board when SFEN is changed
+    $('#puzzle-sfen').on('change', function() {
+        const sfen = $(this).val().trim();
+        if (sfen) {
+            initBoard(sfen);
+        } else {
+            initBoard();
+        }
+    });
+    
+    // New puzzle button (clear form)
+    $(document).on('keydown', function(e) {
+        // Ctrl+N or Cmd+N for new puzzle
+        if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+            e.preventDefault();
+            currentPuzzleId = null;
+            $('#puzzle-name').val('');
+            $('#puzzle-sfen').val('');
+            initBoard();
+        }
+    });
+
+    // Local engine toggle
+    $('#ceval-toggle-btn').on('click', function() { pcToggleCeval(); });
+    if (typeof ClientEval === 'undefined' || !ClientEval.isSupported()) {
+        $('#ceval-toggle-btn').prop('disabled', true)
+            .attr('title', 'Requires modern browser with SharedArrayBuffer (Chrome/Edge/Firefox)');
+    }
+});
+
+// ---------------------------------------------------------------------------
+// puzzle-creator: local engine analysis
+// ---------------------------------------------------------------------------
+
+let _pcCeval    = null;
+let _pcCevalOn  = false;
+
+function pcToggleCeval() {
+    if (_pcCevalOn) {
+        _pcCevalOn = false;
+        _pcCeval?.stop();
+        $('#ceval-toggle-btn').removeClass('active').html('<i class="bi bi-cpu-fill me-1"></i>Local');
+        return;
+    }
+    _pcCevalOn = true;
+    $('#ceval-toggle-btn').addClass('active').html('<i class="bi bi-cpu-fill me-1"></i>Local ✓');
+
+    if (!_pcCeval) {
+        _pcCeval = new ClientEval({
+            multiPv: 3,
+            onReady: function(name) {
+                const short = (name || 'Engine').replace(/TOURNAMENT.*/, '').trim();
+                $('#ceval-toggle-btn').attr('title', 'Local: ' + short);
+            },
+            onEval: function(ev) { pcOnEval(ev); },
+        });
+        _pcCeval.init();
+    }
+    pcAnalyzeCurrent();
+}
+
+function pcAnalyzeCurrent() {
+    if (!_pcCevalOn || !sg) return;
+    const sfen = getCurrentSfen();
+    if (!sfen) return;
+    _pcCeval.analyze(sfen, { movetime: 30000, multiPv: 3 });
+}
+
+function pcOnEval(ev) {
+    if (!_pcCevalOn || !ev || !ev.pvs || !ev.pvs.length) return;
+
+    // Convert PVs to the format expected by the existing showArrows/showMoves code
+    const arrows = [];
+    const brushes = ['green', 'blue', 'yellow'];
+    const turnColor = sg ? (sg.state ? sg.state.turnColor : 'sente') : 'sente';
+
+    ev.pvs.slice(0, 3).forEach(function(pv, idx) {
+        const move = pv.moves && pv.moves[0];
+        if (!move) return;
+        let shape = null;
+        if (move.includes('*')) {
+            const roleMap = { p:'pawn', l:'lance', n:'knight', s:'silver', g:'gold', b:'bishop', r:'rook' };
+            const role = roleMap[move[0].toLowerCase()];
+            if (role) shape = { orig: { color: turnColor, role }, dest: move.substring(2, 4), brush: brushes[idx] || 'paleGrey' };
+        } else {
+            const clean = move.replace('+','').replace('=','');
+            if (clean.length >= 4) shape = { orig: clean.substring(0,2), dest: clean.substring(2,4), brush: brushes[idx] || 'paleGrey' };
+        }
+        if (shape) arrows.push(shape);
+    });
+
+    if (sg && arrows.length) {
+        sg.set({ drawable: { shapes: arrows, enabled: true } });
+    }
+
+    // Update engine info display
+    const label = ev.mate != null
+        ? (ev.mate > 0 ? '▲ 詰' : '▽ 詰') + Math.abs(ev.mate)
+        : (ev.cp != null ? (ev.cp >= 0 ? '▲ ' : '▽ ') + Math.abs(ev.cp) : '');
+    const depth = ev.depth ? ` d${ev.depth}` : '';
+    $('#ceval-toggle-btn').html(`<i class="bi bi-cpu-fill me-1"></i>Local: ${label}${depth}`);
+}

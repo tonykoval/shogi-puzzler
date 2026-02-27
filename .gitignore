@@ -49,3 +49,6 @@ build/
 /eval/
 /src/main/resources/application.conf
 /.idea/
+/data/
+/model/training_data/
+/TODO.md

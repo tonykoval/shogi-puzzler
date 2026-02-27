@@ -2,33 +2,66 @@ package shogi.puzzler.ui
 
 import scalatags.Text.all._
 import shogi.puzzler.db.AppSettings
+import shogi.puzzler.i18n.I18n
+import scala.concurrent.Await
+import scala.concurrent.duration._
 
 object Components {
-  def layout(title: String, userEmail: Option[String], settings: AppSettings, version: String = "", scripts: Seq[Modifier] = Seq.empty)(content: Modifier*) = {
-    html(lang := "en", cls := "dark")(
+
+  /**
+   * Main page layout.
+   *
+   * Pass `lang` (from BaseRoutes.getLang) to enable localization.
+   * The active language is injected as `window.i18n` for JavaScript files.
+   *
+   * Example:
+   *   implicit val lang: String = getLang(request)
+   *   Components.layout("...", userEmail, settings, appVersion)(content)
+   */
+  def layout(
+    title: String,
+    userEmail: Option[String],
+    settings: AppSettings,
+    version: String = "",
+    scripts: Seq[Modifier] = Seq.empty,
+    lang: String = I18n.defaultLang
+  )(content: Modifier*) = {
+    html(scalatags.Text.all.lang := lang, cls := "dark")(
       head(
         meta(charset := "utf-8"),
         meta(name := "viewport", attr("content") := "width=device-width,initial-scale=1,viewport-fit=cover"),
         meta(name := "theme-color", attr("content") := "#2e2a24"),
         tag("title")(title),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css"),
+        link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/select2-bootstrap-5-theme@1.3.0/dist/select2-bootstrap-5-theme.min.css"),
+        link(rel := "stylesheet", href := "/assets/css/select2-dark.css"),
         link(rel := "stylesheet", href := "https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css"),
         link(rel := "stylesheet", href := "/assets/css/common.css"),
         link(rel := "stylesheet", href := "/assets/css/site.css"),
         script(src := "https://code.jquery.com/jquery-3.6.0.min.js"),
+        script(src := "https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"),
         script(src := "https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"),
+        // Inject translations for JavaScript — use window.i18n["key"] in JS files
+        script(raw(s"window.i18n=${I18n.messagesAsJson(lang)};")),
+        // Persist ?lang= query param as cookie and clean URL (no reload)
+        script(raw(
+          "(function(){var p=new URLSearchParams(location.search),l=p.get('lang');" +
+          "if(l){document.cookie='lang='+encodeURIComponent(l)+'; path=/; SameSite=Strict';" +
+          "p.delete('lang');history.replaceState(null,'',location.pathname+(p.toString()?'?'+p:''));}})()"
+        )),
         scripts
       ),
-      body(cls := "container-fluid mt-0", style := "max-width: 1400px;")(
-        renderHeader(userEmail, settings, version),
-        div(cls := "container-fluid")(
+      body(cls := "mt-0")(
+        renderHeader(userEmail, settings, version, lang),
+        div(cls := "container-fluid", style := "max-width: 1400px;")(
           content
         )
       )
     )
   }
 
-  def gameFetcherCard(title: String, idPrefix: String, nickname: String, placeholder: String) = {
+  def gameFetcherCard(title: String, idPrefix: String, nickname: String, placeholder: String)(implicit lang: String = I18n.defaultLang) = {
     div(cls := "row mb-4")(
       div(cls := "col-md-12")(
         div(cls := "card bg-dark text-light border-secondary")(
@@ -37,10 +70,10 @@ object Components {
               h2(cls := "mb-0")(title),
               div(cls := "d-flex flex-wrap gap-2")(
                 div(cls := "input-group input-group-sm", style := "width: 130px")(
-                  tag("span")(cls := "input-group-text bg-dark text-light border-secondary")("Hits"),
+                  tag("span")(cls := "input-group-text bg-dark text-light border-secondary")(I18n.t("nav.hits")),
                   input(`type` := "number", id := s"${idPrefix}MaxGames", cls := "form-control bg-dark text-light border-secondary", value := "10", onchange := " $('.reload-data').first().click(); ")
                 ),
-                button(cls := "btn btn-sm btn-outline-primary", onclick := s"window.maintenance.doFetch('$idPrefix', '$nickname', true)")(s"Fetch $title")
+                button(cls := "btn btn-sm btn-outline-primary", onclick := s"window.maintenance.doFetch('$idPrefix', '$nickname', true)")(s"${I18n.t("nav.fetchButton")} $title")
               )
             ),
             div(id := s"$idPrefix-results", cls := "results-container")(
@@ -52,6 +85,72 @@ object Components {
     )
   }
 
+  /**
+   * Games summary card for the fetch-games page.
+   * Source radio buttons switch the nickname field to the configured value for that platform.
+   */
+  def gamesSummaryCard(
+    lishogiNickname: String,
+    shogiwarsNickname: String,
+    dojo81Nickname: String,
+    defaultSource: String = "lishogi",
+    defaultLimit: Int = 10,
+    isLoggedIn: Boolean = false
+  )(implicit lang: String = I18n.defaultLang) = {
+    val placeholders = Set("lishogi_user", "swars_user", "dojo81_user")
+    val rawNick = defaultSource match {
+      case "shogiwars" => shogiwarsNickname
+      case "dojo81"    => dojo81Nickname
+      case _           => lishogiNickname
+    }
+    val displayNickname = if (placeholders(rawNick)) "" else rawNick
+
+    div(cls := "card bg-dark text-light border-secondary mb-4")(
+      div(cls := "card-body")(
+        // Hidden nickname values for JS source switching
+        input(`type` := "hidden", id := "lishogiNickname", value := lishogiNickname),
+        input(`type` := "hidden", id := "shogiwarsNickname", value := shogiwarsNickname),
+        input(`type` := "hidden", id := "dojo81Nickname", value := dojo81Nickname),
+        // Row 1: source selector + limit
+        div(cls := "d-flex flex-wrap align-items-end gap-3 mb-3")(
+          div()(
+            label(cls := "form-label text-secondary small mb-1")(I18n.t("games.selectSource")),
+            div(cls := "btn-group", role := "group", attr("aria-label") := "Source selection")(
+              input(`type` := "radio", id := "sourceLishogi", name := "sourceGroup", value := "lishogi", cls := "btn-check",
+                if (defaultSource == "lishogi") checked := true else ()),
+              label(cls := "btn btn-outline-secondary", `for` := "sourceLishogi")(I18n.t("games.sourceLishogi")),
+              input(`type` := "radio", id := "sourceShogiwars", name := "sourceGroup", value := "shogiwars", cls := "btn-check",
+                if (defaultSource == "shogiwars") checked := true else ()),
+              label(cls := "btn btn-outline-secondary", `for` := "sourceShogiwars")(I18n.t("games.sourceShogiwars")),
+              if (isLoggedIn) input(`type` := "radio", id := "sourceDojo81", name := "sourceGroup", value := "dojo81", cls := "btn-check",
+                if (defaultSource == "dojo81") checked := true else ()) else (),
+              if (isLoggedIn) label(cls := "btn btn-outline-secondary", `for` := "sourceDojo81")(I18n.t("games.sourceDojo81")) else ()
+            )
+          ),
+          div(style := "width: 120px")(
+            label(cls := "form-label text-secondary small mb-1", `for` := "gamesLimit")(I18n.t("games.limitLabel")),
+            input(`type` := "number", id := "gamesLimit", cls := "form-control bg-dark text-light border-secondary",
+              value := defaultLimit.toString, min := "1", max := "100")
+          )
+        ),
+        // Row 2: nickname input + fetch button aligned at bottom
+        div(cls := "d-flex flex-wrap align-items-end gap-3 mb-3")(
+          div(cls := "flex-grow-1")(
+            label(cls := "form-label", `for` := "gamesNickname")(I18n.t("games.nicknameLabel")),
+            input(`type` := "text", id := "gamesNickname", cls := "form-control bg-dark text-light border-secondary",
+              value := displayNickname, placeholder := I18n.t("games.nicknamePlaceholder"))
+          ),
+          button(id := "fetchGamesBtn", cls := "btn btn-primary")(
+            i(cls := "bi bi-cloud-download me-2"),
+            I18n.t("games.fetchButton")
+          )
+        ),
+        // Results container (populated by JS)
+        div(id := "games-results")()
+      )
+    )
+  }
+
   def configField(labelName: String, fieldName: String, valueStr: String, inputType: String = "text", stepValue: Option[String] = None) = {
     div(cls := "mb-3")(
       label(cls := "form-label")(labelName),
@@ -59,54 +158,155 @@ object Components {
     )
   }
 
-  def renderHeader(userEmail: Option[String], settings: AppSettings, version: String) = {
-    val engineName = settings.enginePath.split("[\\\\/]").last
-    
+  def renderHeader(userEmail: Option[String], settings: AppSettings, version: String, lang: String = I18n.defaultLang) = {
+    implicit val l: String = lang
+    val userDoc = userEmail.flatMap(email => scala.util.Try(Await.result(shogi.puzzler.db.UserRepository.getUser(email), 1.second)).toOption.flatten)
+    val userRole = userDoc.map(_.role)
+    val allowedPages = userDoc.map(_.allowedPages).getOrElse(Set.empty)
+    val isAdmin = userRole.contains("ADMIN")
+
+    def canAccess(page: String): Boolean = isAdmin || allowedPages.contains("*") || allowedPages.contains(page)
+
     tag("nav")(cls := "navbar navbar-expand-lg navbar-dark bg-dark mb-4")(
       div(cls := "container-fluid")(
-        a(cls := "navbar-brand", href := "/")("Shogi Puzzler"),
-        if (version.nonEmpty) span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
-        button(cls := "navbar-toggler", `type` := "button", 
-          attr("data-bs-toggle") := "collapse", 
+        a(cls := "navbar-brand", href := "/")(I18n.t("nav.brand")),
+        if (version.nonEmpty) scalatags.Text.all.span(cls := "badge bg-dark border border-secondary text-secondary ms-1", style := "font-size: 0.7rem;")("v" + version) else (),
+        button(cls := "navbar-toggler", `type` := "button",
+          attr("data-bs-toggle") := "collapse",
           attr("data-bs-target") := "#navbarNav") (
-          span(cls := "navbar-toggler-icon")
+          scalatags.Text.all.span(cls := "navbar-toggler-icon")
         ),
         div(cls := "collapse navbar-collapse", id := "navbarNav")(
-          ul(cls := "navbar-nav me-auto")(
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/my-games")("My Games")
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/viewer")("My Puzzle Viewer")
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/puzzles")("Public Puzzles")
-            ),
-            li(cls := "nav-item")(
-              a(cls := "nav-link", href := "/config")("Config")
+          // Full navigation for authenticated users
+          if (userEmail.isDefined) {
+            ul(cls := "navbar-nav me-auto")(
+              // Practice Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-practice")(
+                  i(cls := "bi bi-controller me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Practice"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Play")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-practice")(
+                  if (canAccess("my-games")) {
+                    li(a(cls := "dropdown-item", href := "/fetch-games")(i(cls := "bi bi-download me-2"), I18n.t("games.pageTitle")))
+                  } else (),
+                  if (canAccess("my-games")) {
+                    li(a(cls := "dropdown-item", href := "/database")(i(cls := "bi bi-database me-2"), I18n.t("database.pageTitle")))
+                  } else (),
+                  if (canAccess("training")) {
+                    li(a(cls := "dropdown-item", href := "/training")(i(cls := "bi bi-mortarboard me-2"), I18n.t("nav.training")))
+                  } else ()
+                )
+              ),
+              // Puzzles Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-puzzles")(
+                  i(cls := "bi bi-puzzle me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Puzzles"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Puzzles")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-puzzles")(
+                  li(a(cls := "dropdown-item", href := "/viewer")(i(cls := "bi bi-puzzle me-2"), I18n.t("nav.puzzles"))),
+                  li(a(cls := "dropdown-item", href := "/study-viewer")(i(cls := "bi bi-book-half me-2"), I18n.t("nav.studies")))
+                )
+              ),
+              // Editor Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-editor")(
+                  i(cls := "bi bi-pencil-square me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Editor"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Edit")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-editor")(
+                  if (canAccess("repertoire")) {
+                    li(a(cls := "dropdown-item", href := "/study")(i(cls := "bi bi-book me-2"), I18n.t("nav.studyEditor")))
+                  } else (),
+                  if (canAccess("puzzle-creator")) {
+                    li(a(cls := "dropdown-item", href := "/puzzle-creator")(i(cls := "bi bi-plus-circle me-2"), I18n.t("nav.puzzleEditor")))
+                  } else (),
+                  if (canAccess("ocr")) {
+                    li(a(cls := "dropdown-item", href := "/ocr")(i(cls := "bi bi-camera me-2"), I18n.t("nav.ocr")))
+                  } else ()
+                )
+              ),
+              // Settings Dropdown
+              li(cls := "nav-item dropdown")(
+                a(cls := "nav-link dropdown-toggle", href := "#", role := "button",
+                  attr("data-bs-toggle") := "dropdown", attr("aria-expanded") := "false",
+                  attr("aria-haspopup") := "true", id := "dropdown-settings")(
+                  i(cls := "bi bi-gear me-1"),
+                  scalatags.Text.all.span(cls := "d-lg-inline d-none")("Settings"),
+                  scalatags.Text.all.span(cls := "d-lg-none")("Settings")
+                ),
+                ul(cls := "dropdown-menu", attr("aria-labelledby") := "dropdown-settings")(
+                  if (canAccess("config")) {
+                    li(a(cls := "dropdown-item", href := "/config")(i(cls := "bi bi-gear me-2"), I18n.t("nav.config")))
+                  } else (),
+                  if (canAccess("admin/users")) {
+                    li(a(cls := "dropdown-item", href := "/admin/users")(i(cls := "bi bi-people me-2"), I18n.t("nav.users")))
+                  } else ()
+                )
+              ),
+              // About (standalone)
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
+              )
             )
-          ),
-          div(cls := "navbar-text d-flex align-items-center flex-wrap")(
+          } else {
+            // Flat navigation for unauthenticated users (no dropdowns)
+            ul(cls := "navbar-nav me-auto")(
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/fetch-games")(i(cls := "bi bi-cloud-download me-1"), I18n.t("games.pageTitle"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/database")(i(cls := "bi bi-database me-1"), I18n.t("database.pageTitle"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/study-viewer")(i(cls := "bi bi-book-half me-1"), I18n.t("nav.studies"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/viewer")(i(cls := "bi bi-puzzle me-1"), I18n.t("nav.puzzles"))
+              ),
+              li(cls := "nav-item")(
+                a(cls := "nav-link", href := "/about")(i(cls := "bi bi-info-circle me-1"), I18n.t("nav.about"))
+              )
+            )
+          },
+          div(cls := "navbar-text d-flex align-items-center flex-wrap gap-2")(
             if (userEmail.isDefined) {
               div(cls := "me-lg-3 text-light-50 my-1", style := "font-size: 0.85rem;")(
                 div(cls := "d-inline-flex flex-wrap gap-2")(
-                  span(span(cls := "badge bg-secondary me-1")("Lishogi"), span(settings.lishogiNickname)),
-                  span(span(cls := "badge bg-secondary me-1")("ShogiWars"), span(settings.shogiwarsNickname)),
-                  span(span(cls := "badge bg-secondary me-1")("81Dojo"), span(settings.dojo81Nickname))
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("Lishogi"), scalatags.Text.all.span(settings.lishogiNickname)),
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("ShogiWars"), scalatags.Text.all.span(settings.shogiwarsNickname)),
+                  scalatags.Text.all.span(scalatags.Text.all.span(cls := "badge bg-secondary me-1")("81Dojo"), scalatags.Text.all.span(settings.dojo81Nickname))
                 )
               )
             } else (),
-            span(cls := "ms-lg-2 my-1")(
-              userEmail.map(email => 
-                span(cls := "d-inline-flex flex-wrap align-items-center gap-2")(
-                  span(cls := "text-light", style := "font-size: 0.85rem;")("Logged in as:"),
-                  span(cls := "badge bg-primary")(i(cls := "bi bi-person-fill me-1"), email),
-                  a(href := "/logout", cls := "btn btn-sm btn-outline-light")("Logout")
+            scalatags.Text.all.span(cls := "my-1")(
+              userEmail.map(email =>
+                scalatags.Text.all.span(cls := "d-inline-flex flex-wrap align-items-center gap-2")(
+                  scalatags.Text.all.span(cls := "text-light", style := "font-size: 0.85rem;")(I18n.t("nav.loggedInAs")),
+                  scalatags.Text.all.span(cls := "badge bg-primary")(i(cls := "bi bi-person-fill me-1"), email),
+                  a(href := "/logout", cls := "btn btn-sm btn-outline-light")(I18n.t("nav.logout"))
                 )
               ).getOrElse(
-                a(href := "/login", cls := "btn btn-sm btn-outline-primary")("Login")
+                a(href := "/login", cls := "btn btn-sm btn-outline-primary")(I18n.t("nav.login"))
               )
-            )
+            ),
+            // Language switcher — only for non-logged-in users (logged-in users set language in /config)
+            if (userEmail.isEmpty) {
+              div(cls := "d-flex gap-1 my-1")(
+                a(href := "/set-lang/sk", cls := s"btn btn-sm ${if (lang == "sk") "btn-primary" else "btn-outline-secondary"}", title := "Slovenčina")("SK"),
+                a(href := "/set-lang/en", cls := s"btn btn-sm ${if (lang == "en") "btn-primary" else "btn-outline-secondary"}", title := "English")("EN")
+              )
+            } else ()
           )
         )
       )

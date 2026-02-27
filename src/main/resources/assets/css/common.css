@@ -455,3 +455,11 @@ html.transp {
     --m-secondary_bg-popup_mix_10: rgba(20,31,7,.64);
     --m-secondary_bg-zebra_mix_10: rgba(128,172,77,.145)
 }
+
+/* Override Bootstrap's text-muted (designed for light bg) in the dark theme */
+html:not(.light) .text-muted {
+    color: #a3a3a3 !important;
+}
+html:not(.light) a.text-muted:hover {
+    color: #bfbfbf !important;
+}
