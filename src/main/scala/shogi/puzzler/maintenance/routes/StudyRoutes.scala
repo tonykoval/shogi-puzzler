@@ -796,7 +796,11 @@ object StudyRoutes extends BaseRoutes {
           } else {
             cask.Response(
               renderStudyEditor(userEmail, settings, rep, pageLang).render,
-              headers = Seq("Content-Type" -> "text/html; charset=utf-8")
+              headers = Seq(
+                "Content-Type"                 -> "text/html; charset=utf-8",
+                "Cross-Origin-Opener-Policy"   -> "same-origin",
+                "Cross-Origin-Embedder-Policy" -> "credentialless"
+              )
             )
           }
         case None => cask.Response("Not Found", statusCode = 404)
@@ -831,7 +835,10 @@ object StudyRoutes extends BaseRoutes {
         div(attr("id") := "main-wrap")(
           div(cls := "rp-main-col")(
             div(cls := "puzzle__board-header")(
-              h2(cls := "puzzle__board-header__title")(name),
+              div(cls := "d-flex align-items-center gap-2", attr("id") := "study-title-wrap")(
+                h2(cls := "puzzle__board-header__title mb-0", attr("id") := "studyTitle")(name),
+                button(cls := "btn btn-sm btn-outline-secondary p-0 px-1", onclick := "startEditTitle()", title := "Rename study")(i(cls := "bi bi-pencil"))
+              ),
               if (sourceAuthor.nonEmpty || studyUrl.nonEmpty) {
                 div(cls := "puzzle__board-header__source")(
                   if (sourceAuthor.nonEmpty) frag(
@@ -861,7 +868,11 @@ object StudyRoutes extends BaseRoutes {
                     button(cls := "btn btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
                     button(cls := "btn btn-outline-light", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
                     button(cls := "btn btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right")),
-                    button(cls := "btn btn-outline-info", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#analyzeModal", title := "Analyze position with engine")(i(cls := "bi bi-cpu"), tag("span")(cls := "d-none d-md-inline ms-1")("Analyze"))
+                    button(cls := "btn btn-outline-secondary", onclick := "saveAnnotations()", title := "Save drawn circles & arrows to comment")(i(cls := "bi bi-pin-angle"), tag("span")(cls := "d-none d-md-inline ms-1")("Save")),
+                    button(cls := "btn btn-outline-info", attr("id") := "analyzeServerBtn", attr("data-bs-toggle") := "modal", attr("data-bs-target") := "#analyzeModal", title := "Analyze position with server engine")(i(cls := "bi bi-cpu"), tag("span")(cls := "d-none d-md-inline ms-1")("Analyze")),
+                    button(cls := "btn btn-outline-warning", attr("id") := "analyzeCancelBtn", onclick := "cancelAnalysis()", title := "Cancel server analysis", style := "display:none;")(i(cls := "bi bi-stop-circle")),
+                    button(cls := "btn btn-outline-success", attr("id") := "studyCevalBtn", onclick := "studyToggleCeval()", title := "Local engine (browser WASM)")(i(cls := "bi bi-cpu-fill"), tag("span")(cls := "d-none d-md-inline ms-1")("Local")),
+                    button(cls := "btn btn-outline-secondary", onclick := "studyOpenCevalSettings()", title := "Local engine settings")(i(cls := "bi bi-gear"))
                   )
                 )
               ),
@@ -873,6 +884,7 @@ object StudyRoutes extends BaseRoutes {
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
                     div(cls := "analyse__engine-results", attr("id") := "engine-results", style := "display:none;"),
+                    div(attr("id") := "engine-status", cls := "text-muted small px-1 pb-1", style := "display:none;"),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
                         div(attr("id") := "variation-list")(
@@ -900,6 +912,7 @@ object StudyRoutes extends BaseRoutes {
         ),
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
+        script(src := "/js/ceval.js"),
         input(`type` := "hidden", attr("id") := "studyId", attr("value") := id),
         input(`type` := "hidden", attr("id") := "sourceUrl", attr("value") := sourceUrl),
         
@@ -1140,6 +1153,34 @@ object StudyRoutes extends BaseRoutes {
               headers = Seq("Content-Type" -> "application/json")
             )
         }
+      }
+    }
+  }
+
+  @cask.post("/study/:id/rename")
+  def renameStudy(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val name = json("name").str.trim
+        if (name.isEmpty) {
+          cask.Response(ujson.Obj("error" -> "Name cannot be empty"), statusCode = 400, headers = Seq("Content-Type" -> "application/json"))
+        } else {
+          Await.result(StudyRepository.renameStudy(id, name), 10.seconds)
+          cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
+        }
+      }
+    }
+  }
+
+  @cask.post("/study/:id/root-comment")
+  def saveRootComment(id: String, request: cask.Request): cask.Response[ujson.Value] = {
+    withAuthJson(request, "repertoire") { email =>
+      withOwnership(id, email) { _ =>
+        val json = ujson.read(request.text())
+        val comment = json("comment").str
+        Await.result(StudyRepository.updateRootComment(id, comment), 10.seconds)
+        cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
       }
     }
   }

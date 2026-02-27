@@ -45,9 +45,7 @@ object MaintenanceRoutes extends BaseRoutes {
   )
 
   def getEngineManager(name: String): EngineManager = {
-    logger.info(s"[MAINTENANCE] Requesting engine manager for: $name")
     engineManagers.getOrElseUpdate(name, {
-      logger.info(s"[MAINTENANCE] Creating new engine manager for: $name")
       val manager = new EngineManager(Seq(name))
       manager.initialize()
       manager
@@ -978,8 +976,6 @@ object MaintenanceRoutes extends BaseRoutes {
 
   @cask.post("/ocr/upload")
   def ocrUpload(request: cask.Request): cask.Response[String] = {
-    logger.info("OCR upload request received")
-    
     try {
       val bytes = request.readAllBytes()
       
@@ -2111,9 +2107,9 @@ object MaintenanceRoutes extends BaseRoutes {
                   I18n.t("database.colDate"), " ", i(cls := "bi bi-sort-down", id := "sortDateIcon", style := "font-size:.8em;opacity:.5")
                 ),
                 tag("th")(I18n.t("database.colPlayers")),
-                tag("th")(I18n.t("database.colSource")),
+                tag("th")(cls := "d-none d-md-table-cell")(I18n.t("database.colSource")),
                 tag("th")(I18n.t("database.colStatus")),
-                if (userEmail.isDefined) tag("th")(I18n.t("database.colPuzzles")) else (),
+                if (userEmail.isDefined) tag("th")(cls := "d-none d-md-table-cell")(I18n.t("database.colPuzzles")) else (),
                 tag("th")(I18n.t("database.colActions"))
               )
             ),
@@ -2479,7 +2475,6 @@ object MaintenanceRoutes extends BaseRoutes {
     withAuthJson(request, "my-games") { userEmailStr =>
       val userEmail = if (oauthEnabled) Some(userEmailStr) else getSessionUserEmail(request)
       val body = request.text()
-      logger.info(s"[MAINTENANCE] Received analysis request")
       val jsonResult = try {
         Right(ujson.read(body))
       } catch {
@@ -2496,11 +2491,8 @@ object MaintenanceRoutes extends BaseRoutes {
           val kif = try { json("kif").str } catch { case _: Exception => "" }
 
           if (kif.isEmpty) {
-            logger.error(s"[MAINTENANCE] KIF is missing in the request")
             cask.Response(ujson.Obj("error" -> "KIF is required"), statusCode = 400)
           } else {
-            logger.info(s"[MAINTENANCE] Analysis request received for player: $player, source: $source, user: $userEmail")
-            
             val kifHash = GameRepository.md5Hash(kif)
             val taskId = TaskManager.createTask(Some(kifHash))
             
@@ -2543,8 +2535,7 @@ object MaintenanceRoutes extends BaseRoutes {
       val targetPlayer = if (player.nonEmpty) player else search_text
       val sourceId = source
       val cacheKey = s"$sourceId:$targetPlayer"
-      logger.info(s"[MAINTENANCE] Fetch request for player: '$targetPlayer', source: '$sourceId', force: $force, limit: $limit, user: $userEmail")
-      
+
       if (targetPlayer.trim.isEmpty) {
         cask.Response(ujson.Obj("error" -> s"No nickname configured or provided for source '$sourceId'."), headers = Seq("Content-Type" -> "application/json"))
       } else {
@@ -2554,11 +2545,8 @@ object MaintenanceRoutes extends BaseRoutes {
         
         Future {
           try {
-            logger.info(s"[MAINTENANCE] Processing fetch for '$targetPlayer' from '$sourceId'")
             val games = if (!force) {
-              logger.info(s"[MAINTENANCE] Fetching games from DB for $targetPlayer, source $sourceId with limit $effectiveLimit")
               val dbGames = Await.result(GameRepository.findByPlayerAndSource(targetPlayer, sourceId, effectiveLimit), 10.seconds)
-              logger.info(s"[MAINTENANCE] DB returned ${dbGames.size} games")
               val mapped = dbGames.map { doc =>
                 SearchGame(
                   sente = doc.get("sente").map(v => cleanPlayerName(v.asString().getValue)).getOrElse(""),
@@ -2575,10 +2563,8 @@ object MaintenanceRoutes extends BaseRoutes {
                   site = doc.get("site").map(_.asString().getValue)
                 )
               }.take(limit)
-              logger.info(s"[MAINTENANCE] Mapped ${mapped.size} games from DB")
               mapped
             } else {
-              logger.info(s"[MAINTENANCE] Fetching games from external source $sourceId for $targetPlayer with limit $limit")
               val fetcher = sources.getOrElse(sourceId, ShogiWarsSource)
               val fetched = fetcher.fetchGames(targetPlayer, limit, userEmail, msg => TaskManager.updateProgress(taskId, msg), skipExisting = true)
               
@@ -2593,10 +2579,8 @@ object MaintenanceRoutes extends BaseRoutes {
                       "site" -> g.site.getOrElse(sourceId)
                     )
                     Await.result(GameRepository.saveGame(g.kif.get, details), 5.seconds)
-                    logger.info(s"[MAINTENANCE] Saved game to DB: ${g.sente} vs ${g.gote} (${g.date})")
                   } catch {
-                    case e: Exception =>
-                      logger.warn(s"[MAINTENANCE] Failed to save game to DB (might already exist): ${e.getMessage}")
+                    case _: Exception => // game might already exist
                   }
                 }
               }
@@ -2630,10 +2614,8 @@ object MaintenanceRoutes extends BaseRoutes {
               
               g.copy(existsInDb = exists, isAnalyzed = analyzed, puzzleCount = pCount)
             }
-            logger.info(s"[MAINTENANCE] gamesWithDbStatus size: ${gamesWithDbStatus.size}")
-            
+
             val filteredGames = gamesWithDbStatus
-            logger.info(s"[MAINTENANCE] filteredGames size: ${filteredGames.size}")
 
             val renderedFrag = div(
               div(cls := "d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3")(
@@ -2762,8 +2744,6 @@ object MaintenanceRoutes extends BaseRoutes {
                 } else frag()
             )
             val rendered = renderedFrag.render
-            logger.info(s"[MAINTENANCE] rendered length for $targetPlayer from $sourceId: ${rendered.length}")
-            
             TaskManager.complete(taskId, rendered)
           } catch {
             case e: Exception =>
@@ -2785,11 +2765,8 @@ object MaintenanceRoutes extends BaseRoutes {
 
   @cask.post("/maintenance-store")
   def storeBatch(request: cask.Request) = {
-    logger.info(s"[MAINTENANCE] Received store request")
     val games = try {
-      val text = request.text()
-      logger.debug(s"[MAINTENANCE] Raw store request body: $text")
-      ujson.read(text).arr.toSeq
+      ujson.read(request.text()).arr.toSeq
     } catch {
       case e: Exception =>
         logger.error(s"[MAINTENANCE] Failed to parse JSON in storeBatch: ${e.getMessage}")
@@ -2820,8 +2797,7 @@ object MaintenanceRoutes extends BaseRoutes {
           Await.result(GameRepository.saveGame(kif, details), 5.seconds)
           stored += 1
         } catch {
-          case e: com.mongodb.MongoWriteException if e.getError.getCategory == com.mongodb.ErrorCategory.DUPLICATE_KEY =>
-            logger.info(s"[MAINTENANCE] Game already stored during batch (race condition)")
+          case _: com.mongodb.MongoWriteException =>
             duplicates += 1
         }
       } else {
@@ -2835,16 +2811,7 @@ object MaintenanceRoutes extends BaseRoutes {
   @cask.post("/maintenance-delete-analysis")
   def deleteAnalysis(request: cask.Request) = {
     withAuthJson(request, "my-games") { _ =>
-      val body = request.text()
-      logger.debug(s"[MAINTENANCE] Raw delete analysis request body: $body")
-      val hash = try {
-        ujson.read(body)("hash").str
-      } catch {
-        case e: Exception =>
-          logger.error(s"[MAINTENANCE] Failed to parse delete analysis request: $body", e)
-          throw e
-      }
-      logger.info(s"[MAINTENANCE] Deleting analysis for hash $hash")
+      val hash = ujson.read(request.text())("hash").str
       Await.result(GameRepository.deleteAnalysis(hash), 10.seconds)
       cask.Response(ujson.Obj("success" -> true), headers = Seq("Content-Type" -> "application/json"))
     }
@@ -2930,7 +2897,6 @@ object MaintenanceRoutes extends BaseRoutes {
 
   @cask.route("/maintenance-<path:rest>", methods = Seq("OPTIONS"))
   def maintenanceOptions(rest: String) = {
-    logger.info(s"[MAINTENANCE] OPTIONS request for $rest")
     cask.Response(
       "",
       headers = Seq(
@@ -2944,16 +2910,12 @@ object MaintenanceRoutes extends BaseRoutes {
   @cask.get("/lishogi-redirect")
   def lishogiRedirect(hash: String = "", request: cask.Request) = {
     withAuth(request, "my-games") { _ =>
-      logger.info(s"[MAINTENANCE] lishogiRedirect entered. Hash param: '$hash'")
-
       try {
         if (hash.isEmpty) {
-          logger.error("[MAINTENANCE] Error: hash parameter is missing or empty")
           cask.Response("Missing hash parameter", statusCode = 400)
         } else {
           getAnnotatedKif(hash) match {
             case Right(annotated) =>
-              logger.info(s"[MAINTENANCE] Annotated KIF for Lishogi (hash: $hash):")
               val client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NEVER)
                 .build()
@@ -2969,12 +2931,9 @@ object MaintenanceRoutes extends BaseRoutes {
 
               val response = client.send(httpRequest, HttpResponse.BodyHandlers.discarding())
 
-              logger.info(s"[MAINTENANCE] Lishogi import response: ${response.statusCode()}")
-
               if (response.statusCode() == 303) {
                 val location = response.headers().firstValue("Location").orElse("")
                 val fullUrl = if (location.startsWith("http")) location else "https://lishogi.org" + location
-                logger.info(s"[MAINTENANCE] Redirecting user to: $fullUrl")
                 cask.Redirect(fullUrl)
               } else {
                 val errorMsg = s"Lishogi returned status ${response.statusCode()}"
@@ -3009,8 +2968,6 @@ object MaintenanceRoutes extends BaseRoutes {
     val gameDoc = Await.result(GameRepository.getGameByHash(hash), 5.seconds)
     val puzzles = Await.result(PuzzleRepository.getPuzzlesForGame(hash), 5.seconds)
 
-    logger.info(s"[MAINTENANCE] Annotating KIF for hash $hash. Puzzles found: ${puzzles.size}")
-
     gameDoc match {
       case Some(doc) =>
         val kif = doc.get("kif").map(_.asString().getValue).getOrElse("")
@@ -3022,10 +2979,8 @@ object MaintenanceRoutes extends BaseRoutes {
             else 1
           }.getOrElse(1)
           val comment = p.get("comment").map(_.asString().getValue).getOrElse("")
-          if (comment.nonEmpty) {
-            logger.info(s"[MAINTENANCE]   Adding comment to move $moveNumber: ${comment.take(20)}...")
-            Some(moveNumber -> comment)
-          } else None
+          if (comment.nonEmpty) Some(moveNumber -> comment)
+          else None
         }.toMap
 
         val annotated = KifAnnotator.annotate(kif, comments)

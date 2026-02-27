@@ -7,11 +7,13 @@ let moveHistory = [];
 const studyId = document.getElementById('studyId').value;
 let lastMoveComment = null;
 
+// Map annotation color letters → Shogiground brush names (matches CSS classes)
+const _annColorToBrush = { G: 'primary', R: 'alternative0', B: 'alternative1', Y: 'hint' };
+
 function parseAnnotations(comment) {
     if (!comment) return { text: '', shapes: [] };
 
     const shapes = [];
-    const colorMap = { G: 'green', B: 'blue', R: 'red', Y: 'yellow' };
 
     const calRegex = /\[%cal\s+([^\]]+)\]/g;
     let match;
@@ -19,7 +21,7 @@ function parseAnnotations(comment) {
         match[1].split(',').forEach(token => {
             token = token.trim();
             if (token.length >= 5) {
-                const brush = colorMap[token[0]] || 'green';
+                const brush = _annColorToBrush[token[0]] || 'primary';
                 const orig = token[1] + token[2];
                 const dest = token[3] + token[4];
                 shapes.push({ orig, dest, brush });
@@ -32,7 +34,7 @@ function parseAnnotations(comment) {
         match[1].split(',').forEach(token => {
             token = token.trim();
             if (token.length >= 3) {
-                const brush = colorMap[token[0]] || 'green';
+                const brush = _annColorToBrush[token[0]] || 'primary';
                 const orig = token[1] + token[2];
                 shapes.push({ orig, dest: orig, brush });
             }
@@ -203,6 +205,7 @@ function handleBoardMove(moveData) {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _svAnalyzeCurrent();
     } else {
         renderBoard();
     }
@@ -325,6 +328,7 @@ function renderVariations() {
                 renderVariations();
                 updateMenuState();
                 displayMoveArrows();
+                _svAnalyzeCurrent();
             };
 
             moveRow.appendChild(moveElem);
@@ -352,6 +356,7 @@ export function revertMove() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _svAnalyzeCurrent();
     }
 }
 
@@ -365,6 +370,7 @@ export function toRoot() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _svAnalyzeCurrent();
     }
 }
 
@@ -382,6 +388,7 @@ export function advanceMove() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _svAnalyzeCurrent();
     }
 }
 
@@ -396,8 +403,197 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+// ── Local engine (WASM) ──────────────────────────────────────────────────────
+
+let _svCeval   = null;
+let _svCevalOn = false;
+
+function svToggleCeval() {
+    const btn = document.getElementById('svCevalBtn');
+    if (_svCevalOn) {
+        _svCevalOn = false;
+        _svCeval?.stop();
+        if (btn) { btn.classList.remove('active'); btn.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local</span>'; }
+        const statusEl = document.getElementById('engine-status');
+        if (statusEl) { statusEl.style.display = 'none'; statusEl.textContent = ''; }
+        const panel = document.getElementById('engine-results');
+        if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+        if (sg) sg.setAutoShapes([]);
+        return;
+    }
+
+    if (typeof ClientEval === 'undefined' || !ClientEval.isSupported()) {
+        alert('Local engine requires a modern browser with SharedArrayBuffer support (Chrome/Edge/Firefox).');
+        return;
+    }
+
+    _svCevalOn = true;
+    if (btn) { btn.classList.add('active'); btn.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local…</span>'; }
+    const statusEl = document.getElementById('engine-status');
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Loading engine…'; }
+
+    if (!_svCeval) {
+        _svInitCeval(); // _svAnalyzeCurrent() is called from onReady
+    } else {
+        _svAnalyzeCurrent(); // engine already loaded, start immediately
+    }
+}
+
+function _svResetCevalBtn() {
+    _svCevalOn = false;
+    _svCeval = null;
+    const b = document.getElementById('svCevalBtn');
+    if (b) { b.classList.remove('active'); b.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local</span>'; }
+    const el = document.getElementById('engine-status');
+    if (el) { el.style.display = 'block'; }
+}
+
+function _svInitCeval() {
+    const s = CevalSettings.load();
+    _svCeval = new ClientEval({
+        multiPv: s.multiPv,
+        threads:  s.threads || undefined,
+        onStatus: (msg) => {
+            const el = document.getElementById('engine-status');
+            if (!el) return;
+            if (msg === 'computing') { el.textContent = 'Computing…'; return; }
+            if (msg === 'ready')     { el.textContent = 'Ready'; return; }
+            // Engine failed to load — reset toggle so user can retry
+            if (msg.startsWith('Engine failed to load')) {
+                el.textContent = '⚠ ' + msg;
+                _svResetCevalBtn();
+                return;
+            }
+            el.textContent = msg;
+        },
+        onReady: (name) => {
+            const b = document.getElementById('svCevalBtn');
+            if (b) b.title = name;
+            const el = document.getElementById('engine-status');
+            if (el) el.textContent = 'Ready';
+            // Start analysis now that the engine is ready
+            _svAnalyzeCurrent();
+        },
+        onEval: (ev) => { _svOnEval(ev); },
+    });
+    _svCeval.init();
+}
+
+function svOpenCevalSettings() {
+    if (typeof CevalSettings === 'undefined') return;
+    CevalSettings.openModal((_newSettings) => {
+        if (!_svCevalOn) return;
+        // Restart engine so new threads / multiPv take effect
+        _svCeval?.destroy();
+        _svCeval = null;
+        _svInitCeval(); // _svAnalyzeCurrent() called from onReady
+    });
+}
+
+function _svAnalyzeCurrent() {
+    if (!_svCevalOn || !currentSfen || !_svCeval || _svCeval.state === 'idle') return;
+    const s = CevalSettings.load();
+    const movetime = s.movetime > 0 ? s.movetime * 1000 : 90000;
+    _svCeval.analyze(currentSfen, { movetime, multiPv: s.multiPv });
+}
+
+function _svOnEval(ev) {
+    if (!_svCevalOn || !ev) return;
+
+    // Update button label
+    const btn = document.getElementById('svCevalBtn');
+    if (btn) {
+        const label = ev.mate != null
+            ? (ev.mate > 0 ? '▲詰' : '▽詰') + Math.abs(ev.mate)
+            : ev.cp != null ? (ev.cp >= 0 ? '▲' : '▽') + Math.abs(ev.cp) : '';
+        btn.innerHTML = `<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">${label} d${ev.depth}</span>`;
+    }
+
+    // Status line
+    const statusEl = document.getElementById('engine-status');
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = `depth ${ev.depth}`; }
+
+    // Engine arrows (overlay on study arrows)
+    if (ev.pvs && ev.pvs.length && sg) {
+        let pos;
+        try { pos = Shogiops.sfen.parseSfen('standard', currentSfen, false).value; } catch (_) {}
+        const brushes = ['green', 'blue', 'yellow'];
+        const shapes = [];
+        ev.pvs.slice(0, 3).forEach((pv, idx) => {
+            const move = pv.moves && pv.moves[0];
+            if (!move) return;
+            const brush = brushes[Math.min(idx, 2)];
+            if (move.includes('*')) {
+                const roleMap = { p:'pawn', l:'lance', n:'knight', s:'silver', g:'gold', b:'bishop', r:'rook' };
+                const role = roleMap[move[0].toLowerCase()];
+                if (role && pos) shapes.push({ orig: { role, color: pos.turn }, dest: Shogiops.makeSquare(move.substring(2, 4)), brush });
+            } else {
+                const parsed = Shogiops.parseUsi(move);
+                if (parsed) shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
+            }
+        });
+        if (shapes.length) sg.setAutoShapes(shapes);
+    }
+
+    // PV panel
+    _svDisplayResults(ev);
+}
+
+function _svDisplayResults(ev) {
+    const panel = document.getElementById('engine-results');
+    if (!panel) return;
+    panel.style.display = 'block';
+
+    let pos;
+    try { pos = Shogiops.sfen.parseSfen('standard', currentSfen, false).value; } catch (_) {}
+    const colorIndicators = ['text-success', 'text-primary', 'text-warning'];
+
+    if (!panel.querySelector('.sv-ceval-header')) {
+        panel.innerHTML = '';
+        const header = document.createElement('div');
+        header.className = 'd-flex justify-content-between align-items-center mb-1 sv-ceval-header';
+        header.innerHTML = '<span class="text-muted small fw-bold">Local Engine</span>';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn btn-sm btn-outline-secondary p-0 px-1';
+        closeBtn.innerHTML = '<i class="bi bi-x"></i>';
+        closeBtn.onclick = svToggleCeval;
+        header.appendChild(closeBtn);
+        panel.appendChild(header);
+        const pvContainer = document.createElement('div');
+        pvContainer.id = 'sv-ceval-pv-rows';
+        panel.appendChild(pvContainer);
+    }
+
+    const pvContainer = document.getElementById('sv-ceval-pv-rows');
+    if (!pvContainer) return;
+    pvContainer.innerHTML = '';
+
+    (ev.pvs || []).slice(0, 3).forEach((pv, index) => {
+        const move = pv.moves && pv.moves[0];
+        if (!move) return;
+        const cp = pv.cp, mate = pv.mate;
+        let scoreText, scoreCls;
+        if (mate != null) {
+            scoreText = mate > 0 ? `#${mate}` : `#${mate}`;
+            scoreCls = mate > 0 ? 'text-success' : 'text-danger';
+        } else {
+            scoreText = cp >= 0 ? `+${cp}` : `${cp}`;
+            scoreCls = cp >= 100 ? 'text-success' : cp <= -100 ? 'text-danger' : 'text-warning';
+        }
+        const moveText = pos ? formatMoveText(move, pos) : move;
+        const colorCls = colorIndicators[Math.min(index, 2)];
+        const depthText = pv.depth ? `d${pv.depth}` : '';
+        const row = document.createElement('div');
+        row.className = 'analyse__engine-result d-flex align-items-center py-1';
+        row.innerHTML = `<i class="bi bi-circle-fill ${colorCls} me-1" style="font-size:0.5em;vertical-align:middle"></i><span class="text-light">${moveText}</span> <span class="fw-bold ${scoreCls} ms-2">${scoreText}</span> <span class="text-muted small ms-1">${depthText}</span>`;
+        pvContainer.appendChild(row);
+    });
+}
+
 window.revertMove = revertMove;
 window.toRoot = toRoot;
 window.advanceMove = advanceMove;
+window.svToggleCeval = svToggleCeval;
+window.svOpenCevalSettings = svOpenCevalSettings;
 
 loadRepertoire();

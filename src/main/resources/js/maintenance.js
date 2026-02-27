@@ -234,7 +234,6 @@ window.maintenance = {
         return;
     }
     if (this.activePolls[taskId]) {
-        console.log('Already polling for task:', taskId);
         return;
     }
     this.activePolls[taskId] = true;
@@ -242,12 +241,10 @@ window.maintenance = {
     const self = this;
     const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
     if (taskId && !activeTasks[taskId]) {
-      console.log('Adding task to localStorage (if missing):', taskId, taskType);
       activeTasks[taskId] = { type: taskType, startedAt: Date.now() };
       localStorage.setItem('activeTasks', JSON.stringify(activeTasks));
     }
 
-    console.log('Starting polling for task:', taskId, 'taskType:', taskType, 'hasResultsContainer:', !!$results);
 
     const poll = () => {
       $.get('/maintenance-task-status?id=' + taskId)
@@ -289,7 +286,6 @@ window.maintenance = {
 
             setTimeout(poll, 1000);
           } else {
-            console.log('Task finished status check:', taskId, task.status, 'hasOnComplete:', !!onComplete);
             delete self.activePolls[taskId];
             // Remove from active tasks
             const currentActive = JSON.parse(localStorage.getItem('activeTasks') || '{}');
@@ -298,7 +294,6 @@ window.maintenance = {
 
             if (task.status === 'completed') {
               if (onComplete) {
-                console.log('Calling onComplete for task:', taskId);
                 onComplete(task.resultHtml);
               } else {
                 console.warn('Task completed but no onComplete callback for taskId:', taskId);
@@ -318,7 +313,6 @@ window.maintenance = {
   },
 
   doFetch: function(source, name, force = false) {
-    console.log('doFetch called for', source, name, 'force:', force);
     const i18n = window.i18n || {};
     if (!name || name.trim() === '') {
       alert((i18n['status.pleaseEnterNickname'] || 'Please enter a nickname for {source}').replace('{source}', source));
@@ -349,7 +343,6 @@ window.maintenance = {
     if (!force) {
       const cachedHtml = localStorage.getItem(cacheKey);
       if (cachedHtml) {
-        console.log('Loading from cache for', source, 'length:', cachedHtml.length);
         $results.html(cachedHtml);
         return;
       }
@@ -374,7 +367,6 @@ window.maintenance = {
     });
 
     if (existingTaskId) {
-      console.log('Task already running for', source, name, 'taskId:', existingTaskId);
       // It will be resumed by the resume logic in ready() or it's already polling
       return;
     }
@@ -383,7 +375,6 @@ window.maintenance = {
     
     $.get('/maintenance-fetch?player=' + encodeURIComponent(name) + '&source=' + source + '&force=' + force + '&limit=' + maxGames)
       .done(function(data) {
-        console.log('Fetch response for ' + source + ':', data);
         let taskId;
         try {
           if (typeof data === 'string') {
@@ -395,7 +386,6 @@ window.maintenance = {
           
           if (!taskId) {
             // If we don't have a taskId, maybe it's the result HTML directly
-            console.log('No taskId in response, setting HTML directly for', source);
             if ($results.length > 0) {
                 $results.html(data);
                 localStorage.setItem(cacheKey, typeof data === 'string' ? data : JSON.stringify(data));
@@ -429,7 +419,6 @@ window.maintenance = {
         
         self.pollTask(taskId, $results, 
           function(html) { // complete
-            console.log('Task complete, HTML length:', html.length, 'Target container:', resultsId, 'Container exists:', $(resultsId).length > 0);
             $(resultsId).html(html);
             try {
               localStorage.setItem(cacheKey, html);
@@ -459,7 +448,6 @@ window.maintenance = {
   },
   
   filterGames: function(filterType, containerId) {
-    console.log('Filtering games:', filterType, 'in', containerId);
     const $container = $('#' + containerId);
     const $rows = $container.find('tbody tr');
     
@@ -545,7 +533,6 @@ $(document).on('click', '.analyze-btn', function() {
   $btn.addClass('btn-task-' + kifHash);
   $btn.prop('disabled', true).html('<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> <span class="btn-text">' + ((window.i18n && window.i18n['common.analyze']) || 'Analyzing...') + '</span>');
   
-  console.log('Sending analysis request for', player, 'from', source, 'kifHash:', kifHash);
   
   $.ajax({
     url: '/maintenance-analyze',
@@ -679,8 +666,6 @@ $(document).on('click', '.reload-data', function() {
 $(document).ready(function() {
   if (!window.maintenance.autoFetched) {
     window.maintenance.autoFetched = true;
-    console.log('My games dashboard ready');
-    
     const lishogiName = $('#lishogiNickname').val();
     const shogiwarsName = $('#shogiwarsNickname').val();
     const dojo81Name = $('#dojo81Nickname').val();
@@ -706,7 +691,6 @@ $(document).ready(function() {
       const activeTasks = JSON.parse(localStorage.getItem('activeTasks') || '{}');
       tasks.forEach(task => {
         if (task.status === 'running' && !activeTasks[task.id]) {
-          console.log('Discovering task from backend:', task.id, task.kifHash);
           activeTasks[task.id] = { type: 'analyze', startedAt: Date.now(), kifHash: task.kifHash };
         }
       });
@@ -719,11 +703,8 @@ $(document).ready(function() {
         // But doFetch might have been skipped if taskId was found in activeTasks.
         // The safest is to ensure only one pollTask runs per taskId.
         if (window.maintenance.activePolls && window.maintenance.activePolls[taskId]) {
-           console.log('Task already polling, skipping resume:', taskId);
            return;
         }
-        
-        console.log('Resuming active task:', taskId, task);
         if (task.type === 'analyze') {
           window.maintenance.pollTask(taskId, null, 
             function(result) { 
@@ -765,7 +746,6 @@ $(document).ready(function() {
              window.maintenance.pollTask(taskId, $results, 
                 function(html) { // complete
                   if ($results && $results.length > 0) {
-                    console.log('Resumed fetch task complete, updating UI:', taskId);
                     $results.html(html);
                   }
                   if (cacheKey) {

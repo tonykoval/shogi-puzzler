@@ -386,3 +386,112 @@ class CevalBar {
     if (this.info) this.info.textContent = '';
   }
 }
+
+// ── CevalSettings ────────────────────────────────────────────────────────────
+/**
+ * Persistent settings for local engine analysis (stored in localStorage).
+ *
+ * Settings:
+ *   multiPv  — number of lines to show (1‥5, default 3)
+ *   movetime — seconds per position (0 = unlimited, default 30)
+ *   threads  — number of threads (0 = auto, default 0)
+ */
+const CevalSettings = {
+  _KEY: 'ceval_settings',
+  _DEFAULTS: { multiPv: 3, movetime: 30, threads: 0 },
+
+  load() {
+    try {
+      return { ...this._DEFAULTS, ...JSON.parse(localStorage.getItem(this._KEY) || '{}') };
+    } catch (_) {
+      return { ...this._DEFAULTS };
+    }
+  },
+
+  save(s) {
+    localStorage.setItem(this._KEY, JSON.stringify({ ...this._DEFAULTS, ...s }));
+  },
+
+  /**
+   * Build and show a Bootstrap modal with engine settings.
+   * @param {function} onApply  Called with the new settings object after the user clicks Apply.
+   */
+  openModal(onApply) {
+    // Remove any stale modal instance first
+    const old = document.getElementById('cevalSettingsModal');
+    if (old) old.remove();
+
+    const s = this.load();
+    const modal = document.createElement('div');
+    modal.id = 'cevalSettingsModal';
+    modal.className = 'modal fade';
+    modal.setAttribute('tabindex', '-1');
+
+    const opt = (val, label, cur) =>
+      `<option value="${val}"${cur === val ? ' selected' : ''}>${label}</option>`;
+
+    modal.innerHTML = `
+      <div class="modal-dialog modal-sm">
+        <div class="modal-content bg-dark text-light border-secondary">
+          <div class="modal-header py-2 border-secondary">
+            <h6 class="modal-title mb-0"><i class="bi bi-cpu-fill me-2"></i>Local Engine Settings</h6>
+            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label small fw-bold">Lines (MultiPV)</label>
+              <select id="cevalSettingsMultiPv" class="form-select form-select-sm bg-dark text-light border-secondary">
+                ${opt(1,'1 line',s.multiPv)}
+                ${opt(2,'2 lines',s.multiPv)}
+                ${opt(3,'3 lines',s.multiPv)}
+                ${opt(5,'5 lines',s.multiPv)}
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label small fw-bold">Time per position</label>
+              <select id="cevalSettingsMovetime" class="form-select form-select-sm bg-dark text-light border-secondary">
+                ${opt(5, '5 seconds', s.movetime)}
+                ${opt(10,'10 seconds',s.movetime)}
+                ${opt(30,'30 seconds',s.movetime)}
+                ${opt(60,'60 seconds',s.movetime)}
+                ${opt(0, 'Unlimited',  s.movetime)}
+              </select>
+            </div>
+            <div class="mb-1">
+              <label class="form-label small fw-bold">Threads</label>
+              <select id="cevalSettingsThreads" class="form-select form-select-sm bg-dark text-light border-secondary">
+                ${opt(0,'Auto (recommended)',s.threads)}
+                ${opt(1,'1',s.threads)}
+                ${opt(2,'2',s.threads)}
+                ${opt(4,'4',s.threads)}
+                ${opt(8,'8',s.threads)}
+              </select>
+              <div class="text-muted mt-1" style="font-size:0.75em;">Changing threads restarts the engine.</div>
+            </div>
+          </div>
+          <div class="modal-footer py-2 border-secondary">
+            <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">Cancel</button>
+            <button type="button" class="btn btn-success btn-sm" id="cevalSettingsApplyBtn">Apply</button>
+          </div>
+        </div>
+      </div>`;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector('#cevalSettingsApplyBtn').addEventListener('click', () => {
+      const newSettings = {
+        multiPv:  parseInt(modal.querySelector('#cevalSettingsMultiPv').value),
+        movetime: parseInt(modal.querySelector('#cevalSettingsMovetime').value),
+        threads:  parseInt(modal.querySelector('#cevalSettingsThreads').value),
+      };
+      this.save(newSettings);
+      bootstrap.Modal.getInstance(modal)?.hide();
+      onApply(newSettings);
+    });
+
+    // Cleanup on hide
+    modal.addEventListener('hidden.bs.modal', () => modal.remove());
+
+    new bootstrap.Modal(modal).show();
+  },
+};

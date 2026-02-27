@@ -453,8 +453,6 @@ function applyMove(moveUsi, index, animate = true) {
     const isStartColorTurn = (index % 2 === 0);
     const currentColor = isStartColorTurn ? startColor : opposite(startColor);
 
-    console.log(`[SEQUENCE] Applying move ${index}: ${moveUsi} for ${currentColor} (animate: ${animate})`);
-
     // Force piece count in hand if it's a drop to avoid Shogiground blocking it
     if (moveUsi.includes('*')) {
         const roleStr = moveUsi[0].toLowerCase();
@@ -495,7 +493,6 @@ function applyMove(moveUsi, index, animate = true) {
         sg.move(orig, dest, prom);
 
         if (capturedPiece) {
-            console.log(`[SEQUENCE] Captured ${capturedPiece.role} for ${currentColor}`);
             // In Shogi, captured piece changes color and goes to capturer's hand
             // We need to unpromote it if it was promoted
             const unpromotedRole = Shogiops.variantUtil.unpromote("standard")(capturedPiece.role) || capturedPiece.role;
@@ -767,8 +764,7 @@ function selectSituation(id, data) {
     $('#engine-result').hide().empty();
     selected = data[id]
     playCountIncremented = false;
-    console.log("[PUZZLE] Selected puzzle data:", selected);
-    
+
     // Update puzzle info panel
     if (selected) {
         $('#turn-text').text(selected.player === "sente" ? (window.i18n && window.i18n['puzzle.senteToMove'] ? window.i18n['puzzle.senteToMove'] : 'Sente to play') : (window.i18n && window.i18n['puzzle.goteToMove'] ? window.i18n['puzzle.goteToMove'] : 'Gote to play'));
@@ -1634,10 +1630,6 @@ function resolveMove(pos, r0, r1, r2, r3) {
 }
 
 function generateConfig(pos) {
-    console.log("[PUZZLE] Position data:", pos);
-    console.log("[PUZZLE] SFEN:", pos.sfen);
-    console.log("[PUZZLE] Hands:", pos.hands);
-    console.log("[PUZZLE] Player:", pos.player);
     return {
         sfen: {
             board: pos.sfen,
@@ -1656,10 +1648,6 @@ function generateConfig(pos) {
             dests: (() => {
                 // Build full SFEN with hands for proper drop dests calculation
                 // SFEN format: <board> <turn> <hands> <moveNumber>
-                console.log("[PUZZLE] pos.sfen:", pos.sfen);
-                console.log("[PUZZLE] pos.hands:", pos.hands);
-                console.log("[PUZZLE] pos.player:", pos.player);
-                
                 // Check if pos.sfen already contains the full SFEN or just the board
                 const sfenParts = pos.sfen.split(' ');
                 let fullSfen;
@@ -1674,13 +1662,9 @@ function generateConfig(pos) {
                     fullSfen = `${pos.sfen} ${turnChar} ${handsStr} 1`;
                 }
                 
-                console.log("[PUZZLE] Full SFEN for drop dests:", fullSfen);
                 const parsed = Shogiops.sfen.parseSfen("standard", fullSfen, false);
-                console.log("[PUZZLE] Parsed SFEN:", parsed);
                 if (parsed.isOk) {
-                    const dests = Shogiops.compat.shogigroundDropDests(parsed.value);
-                    console.log("[PUZZLE] Drop dests:", dests);
-                    return dests;
+                    return Shogiops.compat.shogigroundDropDests(parsed.value);
                 } else {
                     console.error("[PUZZLE] Failed to parse SFEN for drop dests:", parsed.error);
                     return new Map();

@@ -44,7 +44,6 @@ object AnalysisQueue {
       deepLimitOverride: Option[Int] = None,
       winChanceDropOverride: Option[Double] = None
   ): Unit = {
-    logger.info(s"[AnalysisQueue] Enqueuing task $taskId for player $player")
     queue.put(AnalysisTask(taskId, kif, player, source, userEmail, shallowLimitOverride, deepLimitOverride, winChanceDropOverride))
     TaskManager.updateProgress(taskId, s"In queue (position: ${queue.size()})")
     ensureWorkers()

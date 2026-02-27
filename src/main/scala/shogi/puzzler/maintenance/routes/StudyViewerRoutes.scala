@@ -178,7 +178,11 @@ function svSetFilter(btn) {
       case Some(rep) =>
         cask.Response(
           renderViewer(userEmail, settings, rep, pageLang).render,
-          headers = Seq("Content-Type" -> "text/html; charset=utf-8") ++ langCookieHeaders(request)
+          headers = Seq(
+            "Content-Type"                 -> "text/html; charset=utf-8",
+            "Cross-Origin-Opener-Policy"   -> "same-origin",
+            "Cross-Origin-Embedder-Policy" -> "credentialless"
+          ) ++ langCookieHeaders(request)
         )
       case None => cask.Response("Not Found", statusCode = 404)
     }
@@ -239,7 +243,9 @@ function svSetFilter(btn) {
                   div(cls := "analyse__tools__menu")(
                     button(cls := "btn btn-outline-light", onclick := "toRoot()", title := "Back to Start")(i(cls := "bi bi-chevron-double-left")),
                     button(cls := "btn btn-outline-light", onclick := "revertMove()", title := "Previous Move")(i(cls := "bi bi-chevron-left")),
-                    button(cls := "btn btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right"))
+                    button(cls := "btn btn-outline-light", onclick := "advanceMove()", title := "Next Move")(i(cls := "bi bi-chevron-right")),
+                    button(cls := "btn btn-outline-success", attr("id") := "svCevalBtn", onclick := "svToggleCeval()", title := "Local engine (browser WASM)")(i(cls := "bi bi-cpu-fill"), tag("span")(cls := "d-none d-md-inline ms-1")("Local")),
+                    button(cls := "btn btn-outline-secondary", onclick := "svOpenCevalSettings()", title := "Local engine settings")(i(cls := "bi bi-gear"))
                   )
                 )
               ),
@@ -250,6 +256,8 @@ function svSetFilter(btn) {
               div(cls := "puzzle__side__box")(
                 div(cls := "puzzle__tools")(
                   div(cls := "analyse__tools")(
+                    div(cls := "analyse__engine-results", attr("id") := "engine-results", style := "display:none;"),
+                    div(attr("id") := "engine-status", cls := "text-muted small px-1 pb-1", style := "display:none;"),
                     div(cls := "analyse__moves")(
                       div(cls := "analyse__moves__list")(
                         div(attr("id") := "variation-list")(
@@ -267,6 +275,7 @@ function svSetFilter(btn) {
         ),
         script(src := "/js/shogiground.js"),
         script(src := "/js/shogiops.js"),
+        script(src := "/js/ceval.js"),
         input(`type` := "hidden", attr("id") := "studyId", attr("value") := id),
         script(src := "/js/study-viewer.js", `type` := "module")
       )

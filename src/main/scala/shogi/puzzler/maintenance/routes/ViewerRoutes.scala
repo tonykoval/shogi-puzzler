@@ -191,17 +191,13 @@ object ViewerRoutes extends BaseRoutes {
     val isAuthenticated = userEmail.exists(email => canAccessPage(email, "viewer"))
     val lang = getLang(request)
 
-    logger.info(s"[VIEWER] Fetching puzzles with hash: ${hash.getOrElse("none")}, authenticated: $isAuthenticated")
-
     val puzzles = hash match {
       case Some(h) =>
         val puzzlesByHash = Await.result(PuzzleRepository.getPuzzlesForGame(h), 10.seconds)
-        logger.info(s"[VIEWER] Found ${puzzlesByHash.size} puzzles by game_kif_hash")
 
         if (puzzlesByHash.isEmpty) {
-          logger.info(s"[VIEWER] No puzzles found by game_kif_hash, trying ID prefix match")
           val allPuzzles = Await.result(PuzzleRepository.getAllPuzzles(), 10.seconds)
-          val filtered = allPuzzles.filter { doc =>
+          allPuzzles.filter { doc =>
             doc.get("id").exists { idValue =>
               val id = idValue match {
                 case s: org.bson.BsonString => s.getValue
@@ -210,8 +206,6 @@ object ViewerRoutes extends BaseRoutes {
               id.startsWith(h + "#")
             }
           }
-          logger.info(s"[VIEWER] Found ${filtered.size} puzzles by ID prefix")
-          filtered
         } else {
           puzzlesByHash
         }
@@ -219,18 +213,14 @@ object ViewerRoutes extends BaseRoutes {
         val email = userEmail.get
         // Legacy puzzles are already in viewer format
         val legacyPuzzles = Await.result(PuzzleRepository.getLegacyPuzzles(), 10.seconds)
-        logger.info(s"[VIEWER] Found ${legacyPuzzles.size} legacy puzzles")
 
         // Custom puzzles must be converted to viewer format; only show accepted ones
         val acceptedPuzzles = Await.result(PuzzleRepository.getAcceptedPuzzles(email), 10.seconds)
-        logger.info(s"[VIEWER] Found ${acceptedPuzzles.size} accepted custom puzzles for user $email")
         val convertedPuzzles = acceptedPuzzles.map(PuzzleRepository.convertToViewerFormat)
 
         legacyPuzzles ++ convertedPuzzles
       case None =>
-        val publicPuzzles = Await.result(PuzzleRepository.getAllPublicPuzzles(), 10.seconds)
-        logger.info(s"[VIEWER] Found ${publicPuzzles.size} public puzzles")
-        publicPuzzles
+        Await.result(PuzzleRepository.getAllPublicPuzzles(), 10.seconds)
     }
 
     val sortedPuzzles = puzzles.sortBy { doc =>
@@ -283,7 +273,6 @@ object ViewerRoutes extends BaseRoutes {
       obj
     }
 
-    logger.info(s"[VIEWER] Returning ${jsonArray.size} puzzles")
     cask.Response(
       ujson.Arr(jsonArray: _*),
       headers = Seq(
@@ -346,7 +335,6 @@ object ViewerRoutes extends BaseRoutes {
       val multiPv = json.obj.get("multiPv").map(_.num.toInt).getOrElse(1)
 
       try {
-        logger.info(s"[VIEWER] Creating fresh engine for analysis")
         val engineManager = new EngineManager(Seq(settings.enginePath))
         engineManager.initialize()
 

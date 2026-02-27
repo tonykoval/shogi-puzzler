@@ -325,7 +325,19 @@ function highlightMove(idx) {
   const el = document.querySelector(`#move-list .vg-move[data-idx="${idx}"]`);
   if (el) {
     el.classList.add('active');
-    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    // Scroll only within the move list container to avoid page-level scrolling on mobile
+    const container = el.closest('.analyse__moves');
+    if (container) {
+      const elTop    = el.offsetTop - container.offsetTop;
+      const elBottom = elTop + el.offsetHeight;
+      const ctTop    = container.scrollTop;
+      const ctBottom = ctTop + container.clientHeight;
+      if (elTop < ctTop) {
+        container.scrollTop = elTop;
+      } else if (elBottom > ctBottom) {
+        container.scrollTop = elBottom - container.clientHeight;
+      }
+    }
   }
 }
 
@@ -370,8 +382,9 @@ function renderMoveComment(idx) {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); doSaveComment(idx); }
       e.stopPropagation(); // prevent board keyboard shortcuts while typing
     });
-    // Focus only if idx > 0 (not start position)
-    if (idx > 0) textarea.focus();
+    // Focus only if idx > 0 and not on a touch device (mobile keyboard would scroll the page)
+    const isTouchDevice = navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches;
+    if (idx > 0 && !isTouchDevice) textarea.focus();
   }
 
   document.getElementById('mc-save')   && document.getElementById('mc-save').addEventListener('click',   function () { doSaveComment(idx); });

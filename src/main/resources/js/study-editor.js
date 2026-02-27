@@ -3,7 +3,8 @@ let sg;
 let study;
 let currentSfen;
 let history = [];
-let moveHistory = []; // USI moves parallel to history (SFENs)
+let moveHistory = [];
+let _userDrawnShapes = []; // USI moves parallel to history (SFENs)
 const studyId = document.getElementById('studyId').value;
 
 let editingMove = null; // { parentSfen, usi, comment, isPuzzle }
@@ -11,11 +12,15 @@ let engineArrowsActive = false;
 let editingCommentUsi = null;
 let lastMoveComment = null;
 
+// Map annotation color letters ↔ Shogiground brush names
+// Shogiground CSS defines: primary(green), alternative0(red), alternative1(blue/purple), alternative2(cyan), hint(yellow)
+const _annColorToBrush = { G: 'primary', R: 'alternative0', B: 'alternative1', Y: 'hint' };
+const _brushToAnnColor = { primary: 'G', alternative0: 'R', alternative1: 'B', alternative2: 'Y', hint: 'Y' };
+
 function parseAnnotations(comment) {
     if (!comment) return { text: '', shapes: [] };
 
     const shapes = [];
-    const colorMap = { G: 'green', B: 'blue', R: 'red', Y: 'yellow' };
 
     // Parse [%cal ...] arrows
     const calRegex = /\[%cal\s+([^\]]+)\]/g;
@@ -24,7 +29,7 @@ function parseAnnotations(comment) {
         match[1].split(',').forEach(token => {
             token = token.trim();
             if (token.length >= 5) {
-                const brush = colorMap[token[0]] || 'green';
+                const brush = _annColorToBrush[token[0]] || 'primary';
                 const orig = token[1] + token[2];
                 const dest = token[3] + token[4];
                 shapes.push({ orig, dest, brush });
@@ -38,7 +43,7 @@ function parseAnnotations(comment) {
         match[1].split(',').forEach(token => {
             token = token.trim();
             if (token.length >= 3) {
-                const brush = colorMap[token[0]] || 'green';
+                const brush = _annColorToBrush[token[0]] || 'primary';
                 const orig = token[1] + token[2];
                 shapes.push({ orig, dest: orig, brush });
             }
@@ -151,6 +156,12 @@ function renderBoard(lastMoveUsi) {
             events: {
                 move: (orig, dest, prom) => handleMove({ orig, dest, prom }),
                 drop: (piece, key) => handleMove({ role: piece.role, key }),
+            },
+            drawable: {
+                enabled: true,
+                visible: true,
+                eraseOnClick: false,
+                onChange: (shapes) => { _userDrawnShapes = shapes; },
             }
         });
         sg.attach({
@@ -225,6 +236,7 @@ async function handleMove(moveData) {
         moveHistory.push(usi);
         currentSfen = nextSfen;
         await loadRepertoire(usi);
+        _studyAnalyzeCurrent();
     } catch (e) {
         console.error('Error handling move:', e);
         alert('Error: ' + e.message);
@@ -309,6 +321,7 @@ function displayMoveArrows() {
     if (engineArrowsActive || !sg) return;
     if (!study || !study.nodes) {
         sg.setAutoShapes([]);
+        _userDrawnShapes = [];
         return;
     }
 
@@ -316,27 +329,26 @@ function displayMoveArrows() {
     const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
 
     const pos = Shogiops.sfen.parseSfen("standard", currentSfen, false).value;
-    const shapes = [];
+    const autoShapes = [];
 
-    node.moves.forEach((move, index) => {
-        const brush = 'dark';
+    node.moves.forEach((move) => {
         const parsed = Shogiops.parseUsi(move.usi);
         if (parsed) {
             if (parsed.role) {
-                shapes.push({ orig: { role: parsed.role, color: pos.turn }, dest: Shogiops.makeSquare(parsed.to), brush });
+                autoShapes.push({ orig: { role: parsed.role, color: pos.turn }, dest: Shogiops.makeSquare(parsed.to), brush: 'dark' });
             } else {
-                shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
+                autoShapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush: 'dark' });
             }
         }
     });
 
-    // Add annotation shapes from the last played move's comment
-    if (lastMoveComment) {
-        const { shapes: annotationShapes } = parseAnnotations(lastMoveComment);
-        shapes.push(...annotationShapes);
-    }
+    sg.setAutoShapes(autoShapes);
 
-    sg.setAutoShapes(shapes);
+    // Load saved annotation shapes (circles/arrows from comment) into drawable so user can edit them
+    const comment = lastMoveComment || (currentSfen === study?.rootSfen ? study?.rootComment : null);
+    const annotationShapes = comment ? parseAnnotations(comment).shapes : [];
+    sg.set({ drawable: { shapes: annotationShapes } });
+    _userDrawnShapes = annotationShapes;
 }
 
 function renderVariations() {
@@ -373,6 +385,7 @@ function renderVariations() {
                 renderVariations();
                 updateMenuState();
                 displayMoveArrows();
+                _studyAnalyzeCurrent();
             };
 
             const moveActionWrapper = document.createElement('div');
@@ -763,7 +776,9 @@ async function saveMoveTranslation(parentSfen, usi, lang, comment) {
     }
 }
 
-// Engine analysis
+// Engine analysis — server-side
+
+let _studyAbortCtrl = null;
 
 async function analyzePosition() {
     const depth = parseInt(document.getElementById('analyzeDepth')?.value) || 15;
@@ -778,11 +793,14 @@ async function analyzePosition() {
         if (modal) modal.hide();
     }
 
-    const btn = document.getElementById('analyzeBtn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<i class="bi bi-hourglass-split me-1"></i>Analyzing...';
-    }
+    const serverBtn = document.getElementById('analyzeServerBtn');
+    const cancelBtn = document.getElementById('analyzeCancelBtn');
+    const analyzeBtn = document.getElementById('analyzeBtn');
+    if (serverBtn) { serverBtn.disabled = true; serverBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status"></span>Analyzing…'; }
+    if (cancelBtn) cancelBtn.style.display = 'inline-block';
+    if (analyzeBtn) analyzeBtn.disabled = true;
+
+    _studyAbortCtrl = new AbortController();
 
     try {
         const body = { sfen: currentSfen, depth, multiPv };
@@ -791,7 +809,8 @@ async function analyzePosition() {
         const response = await fetch('/puzzle-creator/analyze', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: _studyAbortCtrl.signal
         });
 
         if (!response.ok) throw new Error('Analysis failed');
@@ -803,14 +822,247 @@ async function analyzePosition() {
             throw new Error(data.error || 'Analysis failed');
         }
     } catch (e) {
-        console.error('Engine analysis error:', e);
-        alert('Analysis failed: ' + e.message);
+        if (e.name !== 'AbortError') {
+            console.error('Engine analysis error:', e);
+            alert('Analysis failed: ' + e.message);
+        }
     } finally {
-        if (btn) {
-            btn.disabled = false;
-            btn.innerHTML = 'Analyze';
+        _studyAbortCtrl = null;
+        if (serverBtn) { serverBtn.disabled = false; serverBtn.innerHTML = '<i class="bi bi-cpu"></i><span class="d-none d-md-inline ms-1">Analyze</span>'; }
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        if (analyzeBtn) analyzeBtn.disabled = false;
+    }
+}
+
+function cancelAnalysis() {
+    _studyAbortCtrl?.abort();
+}
+
+// Engine analysis — local (WASM)
+
+let _studyCeval = null;
+let _studyCevalOn = false;
+
+function studyToggleCeval() {
+    const btn = document.getElementById('studyCevalBtn');
+    if (_studyCevalOn) {
+        _studyCevalOn = false;
+        _studyCeval?.stop();
+        if (btn) { btn.classList.remove('active'); btn.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local</span>'; }
+        const statusEl = document.getElementById('engine-status');
+        if (statusEl) { statusEl.style.display = 'none'; statusEl.textContent = ''; }
+        const panel = document.getElementById('engine-results');
+        if (panel) { panel.style.display = 'none'; panel.innerHTML = ''; }
+        engineArrowsActive = false;
+        displayMoveArrows();
+        return;
+    }
+
+    if (typeof ClientEval === 'undefined' || !ClientEval.isSupported()) {
+        alert('Local engine requires a modern browser with SharedArrayBuffer support (Chrome/Edge/Firefox).');
+        return;
+    }
+
+    _studyCevalOn = true;
+    if (btn) { btn.classList.add('active'); btn.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local…</span>'; }
+
+    const statusEl = document.getElementById('engine-status');
+    if (statusEl) { statusEl.style.display = 'block'; statusEl.textContent = 'Loading engine…'; }
+
+    if (!_studyCeval) {
+        _studyInitCeval(); // _studyAnalyzeCurrent() is called from onReady
+    } else {
+        _studyAnalyzeCurrent(); // engine already loaded, start immediately
+    }
+}
+
+function _studyResetCevalBtn() {
+    _studyCevalOn = false;
+    _studyCeval = null;
+    const b = document.getElementById('studyCevalBtn');
+    if (b) { b.classList.remove('active'); b.innerHTML = '<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">Local</span>'; }
+    const el = document.getElementById('engine-status');
+    if (el) { el.style.display = 'block'; }
+}
+
+function _studyInitCeval() {
+    const s = CevalSettings.load();
+    _studyCeval = new ClientEval({
+        multiPv: s.multiPv,
+        threads:  s.threads || undefined,
+        onStatus: (msg) => {
+            const el = document.getElementById('engine-status');
+            if (!el) return;
+            if (msg === 'computing') { el.textContent = 'Computing…'; return; }
+            if (msg === 'ready')     { el.textContent = 'Ready'; return; }
+            // Engine failed to load — reset toggle so user can retry
+            if (msg.startsWith('Engine failed to load')) {
+                el.textContent = '⚠ ' + msg;
+                _studyResetCevalBtn();
+                return;
+            }
+            el.textContent = msg;
+        },
+        onReady: (name) => {
+            const b = document.getElementById('studyCevalBtn');
+            if (b) b.title = name;
+            const el = document.getElementById('engine-status');
+            if (el) el.textContent = 'Ready';
+            // Start analysis now that the engine is ready
+            _studyAnalyzeCurrent();
+        },
+        onEval: (ev) => { _studyOnEval(ev); },
+    });
+    _studyCeval.init();
+}
+
+function studyOpenCevalSettings() {
+    if (typeof CevalSettings === 'undefined') return;
+    CevalSettings.openModal((_newSettings) => {
+        if (!_studyCevalOn) return;
+        // Restart engine so new threads / multiPv take effect immediately
+        _studyCeval?.destroy();
+        _studyCeval = null;
+        _studyInitCeval(); // _studyAnalyzeCurrent() called from onReady
+    });
+}
+
+function _studyAnalyzeCurrent() {
+    if (!_studyCevalOn || !currentSfen || !_studyCeval || _studyCeval.state === 'idle') return;
+    const s = CevalSettings.load();
+    const movetime = s.movetime > 0 ? s.movetime * 1000 : 90000;
+    _studyCeval.analyze(currentSfen, { movetime, multiPv: s.multiPv });
+}
+
+function _studyOnEval(ev) {
+    if (!_studyCevalOn || !ev) return;
+
+    // Update button label
+    const btn = document.getElementById('studyCevalBtn');
+    if (btn) {
+        const label = ev.mate != null
+            ? (ev.mate > 0 ? '▲詰' : '▽詰') + Math.abs(ev.mate)
+            : ev.cp != null ? (ev.cp >= 0 ? '▲' : '▽') + Math.abs(ev.cp) : '';
+        btn.innerHTML = `<i class="bi bi-cpu-fill"></i><span class="d-none d-md-inline ms-1">${label} d${ev.depth}</span>`;
+    }
+
+    // Update status
+    const statusEl = document.getElementById('engine-status');
+    if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.textContent = `depth ${ev.depth}`;
+    }
+
+    // Draw arrows for top moves
+    if (ev.pvs && ev.pvs.length && sg) {
+        let pos;
+        try { pos = Shogiops.sfen.parseSfen('standard', currentSfen, false).value; } catch (_) {}
+        const brushes = ['green', 'blue', 'yellow'];
+        const shapes = [];
+        ev.pvs.slice(0, 3).forEach((pv, idx) => {
+            const move = pv.moves && pv.moves[0];
+            if (!move) return;
+            const brush = brushes[Math.min(idx, 2)];
+            if (move.includes('*')) {
+                const roleMap = { p:'pawn', l:'lance', n:'knight', s:'silver', g:'gold', b:'bishop', r:'rook' };
+                const role = roleMap[move[0].toLowerCase()];
+                if (role && pos) shapes.push({ orig: { role, color: pos.turn }, dest: Shogiops.makeSquare(move.substring(2, 4)), brush });
+            } else {
+                const parsed = Shogiops.parseUsi(move);
+                if (parsed) shapes.push({ orig: Shogiops.makeSquare(parsed.from), dest: Shogiops.makeSquare(parsed.to), brush });
+            }
+        });
+        if (shapes.length) {
+            engineArrowsActive = true;
+            sg.setAutoShapes(shapes);
         }
     }
+
+    // Display PV lines in panel
+    _displayLocalEngineResults(ev);
+}
+
+function _displayLocalEngineResults(ev) {
+    const panel = document.getElementById('engine-results');
+    if (!panel) return;
+    panel.style.display = 'block';
+
+    let pos;
+    try { pos = Shogiops.sfen.parseSfen('standard', currentSfen, false).value; } catch (_) {}
+
+    const colorIndicators = ['text-success', 'text-primary', 'text-warning'];
+    const brushColors = ['text-success', 'text-primary', 'text-warning'];
+
+    // Header (only build once, reuse if already present)
+    if (!panel.querySelector('.study-ceval-header')) {
+        panel.innerHTML = '';
+        const header = document.createElement('div');
+        header.className = 'd-flex justify-content-between align-items-center mb-1 study-ceval-header';
+        header.innerHTML = '<span class="text-muted small fw-bold">Local Engine</span>';
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'btn btn-sm btn-outline-secondary p-0 px-1';
+        closeBtn.innerHTML = '<i class="bi bi-x"></i>';
+        closeBtn.onclick = () => { studyToggleCeval(); clearEngineAnalysis(); };
+        header.appendChild(closeBtn);
+        panel.appendChild(header);
+        // Placeholder for PV rows
+        const pvContainer = document.createElement('div');
+        pvContainer.id = 'ceval-pv-rows';
+        panel.appendChild(pvContainer);
+    }
+
+    const pvContainer = document.getElementById('ceval-pv-rows');
+    if (!pvContainer) return;
+    pvContainer.innerHTML = '';
+
+    const captureSfen = currentSfen; // capture for button closures
+    (ev.pvs || []).slice(0, 3).forEach((pv, index) => {
+        const move = pv.moves && pv.moves[0];
+        if (!move) return;
+        const cp = pv.cp, mate = pv.mate;
+        let scoreText, scoreCls;
+        if (mate != null) {
+            scoreText = mate > 0 ? `#${mate}` : `#${mate}`;
+            scoreCls = mate > 0 ? 'text-success' : 'text-danger';
+        } else {
+            scoreText = cp >= 0 ? `+${cp}` : `${cp}`;
+            scoreCls = cp >= 100 ? 'text-success' : cp <= -100 ? 'text-danger' : 'text-warning';
+        }
+        const moveText = pos ? formatMoveText(move, pos) : move;
+        const colorCls = colorIndicators[Math.min(index, 2)];
+        const depthText = pv.depth ? `d${pv.depth}` : '';
+
+        const row = document.createElement('div');
+        row.className = 'analyse__engine-result d-flex align-items-center justify-content-between py-1';
+
+        const moveInfo = document.createElement('span');
+        moveInfo.innerHTML = `<i class="bi bi-circle-fill ${colorCls} me-1" style="font-size:0.5em;vertical-align:middle"></i><span class="text-light">${moveText}</span> <span class="fw-bold ${scoreCls} ms-2">${scoreText}</span> <span class="text-muted small ms-1">${depthText}</span>`;
+
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'd-flex gap-1';
+
+        const addMoveBtn = document.createElement('button');
+        addMoveBtn.className = 'btn btn-sm btn-outline-success p-0 px-1';
+        addMoveBtn.style.lineHeight = '1';
+        addMoveBtn.innerHTML = '<i class="bi bi-plus-lg"></i>';
+        addMoveBtn.title = 'Add move to study';
+        addMoveBtn.onclick = () => addLocalMoveToStudy(pv, captureSfen);
+        btnGroup.appendChild(addMoveBtn);
+
+        if (pv.moves && pv.moves.length > 1) {
+            const pvBtn = document.createElement('button');
+            pvBtn.className = 'btn btn-sm btn-outline-warning p-0 px-1';
+            pvBtn.style.lineHeight = '1';
+            pvBtn.innerHTML = '<i class="bi bi-diagram-3"></i>';
+            pvBtn.title = `Save PV line (${pv.moves.length} moves)`;
+            pvBtn.onclick = () => addLocalPvToStudy(pv, captureSfen);
+            btnGroup.appendChild(pvBtn);
+        }
+
+        row.appendChild(moveInfo);
+        row.appendChild(btnGroup);
+        pvContainer.appendChild(row);
+    });
 }
 
 function displayEngineResults(moves) {
@@ -892,6 +1144,25 @@ function displayEngineResults(moves) {
         addBtn.onclick = () => addEngineEvalAsComment(move);
         btnGroup.appendChild(addBtn);
 
+        // Save full PV sequence if pv string is present
+        if (move.pv) {
+            const pvMoves = move.pv.trim().split(/\s+/).filter(Boolean);
+            if (pvMoves.length > 1) {
+                const pvBtn = document.createElement('button');
+                pvBtn.className = 'btn btn-sm btn-outline-warning p-0 px-1';
+                pvBtn.style.lineHeight = '1';
+                pvBtn.innerHTML = '<i class="bi bi-diagram-3"></i>';
+                pvBtn.title = `Save PV line (${pvMoves.length} moves)`;
+                const captureSfen = currentSfen;
+                const score = move.score;
+                const evalText = score.kind === 'mate'
+                    ? `Mate in ${score.value}`
+                    : score.value >= 0 ? `+${score.value}` : `${score.value}`;
+                pvBtn.onclick = () => addEnginePvSequence(captureSfen, pvMoves, `Engine: ${evalText} (d${move.depth})`);
+                btnGroup.appendChild(pvBtn);
+            }
+        }
+
         row.appendChild(moveInfo);
         row.appendChild(btnGroup);
         panel.appendChild(row);
@@ -900,10 +1171,14 @@ function displayEngineResults(moves) {
 
 function clearEngineAnalysis() {
     engineArrowsActive = false;
+    // When local engine is on, just clear the panel content — it will be repopulated
+    // by the next onEval callback. Only hide if local engine is off.
     const panel = document.getElementById('engine-results');
-    if (panel) {
+    if (panel && !_studyCevalOn) {
         panel.style.display = 'none';
         panel.innerHTML = '';
+    } else if (panel && _studyCevalOn) {
+        panel.innerHTML = ''; // cleared, will rebuild on next eval
     }
     displayMoveArrows();
 }
@@ -982,6 +1257,195 @@ async function addEngineMove(engineMove) {
     }
 }
 
+// Save a full PV line (sequence of USI moves) as a study branch.
+// firstComment is set on the first move; subsequent moves get no comment.
+async function addEnginePvSequence(startSfen, usiMoves, firstComment) {
+    if (!usiMoves || !usiMoves.length) return;
+
+    // Compute (parentSfen, usi, nextSfen) for each step
+    const steps = [];
+    let sfen = startSfen;
+    for (const usi of usiMoves) {
+        try {
+            const pos = Shogiops.sfen.parseSfen('standard', sfen, false).value;
+            const move = Shogiops.parseUsi(usi);
+            pos.play(move);
+            const nextSfen = Shogiops.sfen.makeSfen(pos);
+            steps.push({ parentSfen: sfen, usi, nextSfen });
+            sfen = nextSfen;
+        } catch (_) { break; }
+    }
+    if (!steps.length) return;
+
+    for (let i = 0; i < steps.length; i++) {
+        const { parentSfen, usi, nextSfen } = steps[i];
+        try {
+            const resp = await fetch(`/study/${studyId}/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ parentSfen, usi, nextSfen, comment: i === 0 ? firstComment : '' })
+            });
+            if (!resp.ok) { console.error('addEnginePvSequence step', i, 'failed'); break; }
+        } catch (e) { console.error('addEnginePvSequence error:', e); break; }
+    }
+    await loadRepertoire();
+}
+
+// Helpers for local engine PV objects: { moves: [...], cp, mate, depth }
+async function addLocalMoveToStudy(pv, captureSfen) {
+    const usi = pv.moves && pv.moves[0];
+    if (!usi) return;
+    const evalText = pv.mate != null
+        ? `Mate in ${Math.abs(pv.mate)}`
+        : pv.cp != null ? (pv.cp >= 0 ? `+${pv.cp}` : `${pv.cp}`) : '?';
+    const comment = `Engine: ${evalText} (d${pv.depth})`;
+    try {
+        const pos = Shogiops.sfen.parseSfen('standard', captureSfen, false).value;
+        const move = Shogiops.parseUsi(usi);
+        pos.play(move);
+        const nextSfen = Shogiops.sfen.makeSfen(pos);
+        const resp = await fetch(`/study/${studyId}/move`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parentSfen: captureSfen, usi, nextSfen, comment })
+        });
+        if (!resp.ok) throw new Error('Failed to add move');
+        await loadRepertoire();
+    } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function addLocalPvToStudy(pv, captureSfen) {
+    const evalText = pv.mate != null
+        ? `Mate in ${Math.abs(pv.mate)}`
+        : pv.cp != null ? (pv.cp >= 0 ? `+${pv.cp}` : `${pv.cp}`) : '?';
+    await addEnginePvSequence(captureSfen, pv.moves || [], `Engine: ${evalText} (d${pv.depth})`);
+}
+
+// ── Board annotations (save circles & arrows to comment) ────────────────────
+
+function shapesToAnnotationString(shapes) {
+    const arrows = [], circles = [];
+    shapes.forEach(s => {
+        if (!s.orig || typeof s.orig !== 'string') return;
+        const letter = _brushToAnnColor[s.brush] || 'G';
+        const isCircle = !s.dest || s.dest === s.orig;
+        if (isCircle) {
+            circles.push(letter + s.orig);
+        } else if (typeof s.dest === 'string') {
+            arrows.push(letter + s.orig + s.dest);
+        }
+    });
+    let result = '';
+    if (arrows.length)  result += `[%cal ${arrows.join(',')}]`;
+    if (circles.length) result += `[%csl ${circles.join(',')}]`;
+    return result;
+}
+
+async function saveAnnotations() {
+    if (!sg) return;
+
+    const savedShapes = _userDrawnShapes.filter(s =>
+        s.brush && s.brush in _brushToAnnColor && typeof s.orig === 'string'
+    );
+    const annotStr = shapesToAnnotationString(savedShapes);
+
+    // Merge: new annotations replace old ones, preserve existing text
+    const isRoot = currentSfen === study?.rootSfen;
+    const existing = isRoot
+        ? (study?.rootComment || '')
+        : (lastMoveComment || '');
+    const existingText = parseAnnotations(existing).text;
+    const newComment = annotStr
+        ? (existingText ? annotStr + '\n' + existingText : annotStr)
+        : existingText;
+
+    try {
+        if (isRoot) {
+            const resp = await fetch(`/study/${studyId}/root-comment`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ comment: newComment })
+            });
+            if (!resp.ok) throw new Error('Failed to save');
+        } else {
+            const parentSfen = history[history.length - 1];
+            const usi = moveHistory[moveHistory.length - 1];
+            if (!parentSfen || !usi) { alert('Navigate to a move first.'); return; }
+            const nodeKey = sanitizeSfen(parentSfen);
+            const node = (study.nodes && study.nodes[nodeKey]) || { moves: [] };
+            const matchingMove = node.moves.find(m => m.usi === usi);
+            const resp = await fetch(`/study/${studyId}/move/update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ parentSfen, usi, comment: newComment, isPuzzle: matchingMove?.isPuzzle || false })
+            });
+            if (!resp.ok) throw new Error('Failed to save');
+        }
+        await loadRepertoire();
+    } catch (e) {
+        alert('Error saving annotations: ' + e.message);
+    }
+}
+
+// ── Study title inline edit ──────────────────────────────────────────────────
+
+let _editingTitle = null;
+
+function startEditTitle() {
+    const titleEl = document.getElementById('studyTitle');
+    if (!titleEl) return;
+    _editingTitle = titleEl.textContent.trim();
+    const wrap = document.getElementById('study-title-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = `
+        <input type="text" id="titleInput" class="form-control form-control-sm bg-dark text-light border-secondary"
+               value="${_editingTitle.replace(/"/g, '&quot;')}" style="max-width:320px;">
+        <button class="btn btn-sm btn-success ms-1" onclick="saveTitle()"><i class="bi bi-check-lg"></i></button>
+        <button class="btn btn-sm btn-secondary ms-1" onclick="cancelEditTitle()"><i class="bi bi-x-lg"></i></button>`;
+    const inp = document.getElementById('titleInput');
+    inp.focus();
+    inp.select();
+    inp.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  saveTitle();
+        if (e.key === 'Escape') cancelEditTitle();
+    });
+}
+
+function _restoreTitleWrap(name) {
+    const wrap = document.getElementById('study-title-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = `
+        <h2 class="puzzle__board-header__title mb-0" id="studyTitle">${name}</h2>
+        <button class="btn btn-sm btn-outline-secondary p-0 px-1" onclick="startEditTitle()" title="Rename study"><i class="bi bi-pencil"></i></button>`;
+}
+
+async function saveTitle() {
+    const inp = document.getElementById('titleInput');
+    if (!inp) return;
+    const newName = inp.value.trim();
+    if (!newName) return;
+    try {
+        const resp = await fetch(`/study/${studyId}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName })
+        });
+        if (!resp.ok) throw new Error('Failed to rename');
+        _restoreTitleWrap(newName);
+        document.title = `Editing ${newName}`;
+        _editingTitle = null;
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+function cancelEditTitle() {
+    if (_editingTitle !== null) {
+        _restoreTitleWrap(_editingTitle);
+        _editingTitle = null;
+    }
+}
+
 async function reloadFromStudy() {
     const btn = document.getElementById('reloadStudyBtn');
     if (btn) {
@@ -1025,6 +1489,7 @@ export function revertMove() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _studyAnalyzeCurrent();
     }
 }
 
@@ -1040,6 +1505,7 @@ export function toRoot() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _studyAnalyzeCurrent();
     }
 }
 
@@ -1059,6 +1525,7 @@ export function advanceMove() {
         renderVariations();
         updateMenuState();
         displayMoveArrows();
+        _studyAnalyzeCurrent();
     }
 }
 
@@ -1078,7 +1545,14 @@ window.toRoot = toRoot;
 window.advanceMove = advanceMove;
 window.saveMoveDetails = saveMoveDetails;
 window.analyzePosition = analyzePosition;
+window.cancelAnalysis = cancelAnalysis;
+window.studyToggleCeval = studyToggleCeval;
+window.studyOpenCevalSettings = studyOpenCevalSettings;
 window.clearEngineAnalysis = clearEngineAnalysis;
+window.saveAnnotations = saveAnnotations;
+window.startEditTitle = startEditTitle;
+window.saveTitle = saveTitle;
+window.cancelEditTitle = cancelEditTitle;
 
 async function importMoves() {
     const usis = document.getElementById('importUsis').value;

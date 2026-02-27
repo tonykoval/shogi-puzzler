@@ -194,20 +194,20 @@ function renderTable(games, total, page, pageSize) {
       ? '<button class="btn btn-sm btn-outline-secondary analyze-btn" data-kifhash="' + escHtml(game.kifHash) + '" ' +
           'title="' + (i18n['database.btnReanalyze'] || 'Re-analyze') + '">' +
           '<i class="bi bi-arrow-repeat"></i></button>'
-      : '<button class="btn btn-sm btn-outline-primary analyze-btn" data-kifhash="' + escHtml(game.kifHash) + '">' +
-          '<i class="bi bi-cpu me-1"></i>' + (i18n['database.btnAnalyze'] || 'Analyze') + '</button>';
+      : '<button class="btn btn-sm btn-outline-primary analyze-btn" data-kifhash="' + escHtml(game.kifHash) + '" ' +
+          'title="' + (i18n['database.btnAnalyze'] || 'Analyze') + '">' +
+          '<i class="bi bi-cpu"></i><span class="d-none d-sm-inline ms-1">' + (i18n['database.btnAnalyze'] || 'Analyze') + '</span></button>';
 
     return (
       '<tr data-kifhash="' + escHtml(game.kifHash) + '">' +
       '<td class="text-muted small align-middle text-nowrap">' + escHtml(date) + '</td>' +
-      '<td class="align-middle">' +
-        '<span class="opacity-50 me-1">☗</span><span class="fw-medium">' + escHtml(game.sente) + '</span>' +
-        '<span class="mx-2 text-muted opacity-50">vs</span>' +
-        '<span class="opacity-50 me-1">☖</span>' + escHtml(game.gote) +
+      '<td class="align-middle" style="max-width:0;width:40%">' +
+        '<div class="text-truncate fw-medium"><span class="opacity-50 me-1">☗</span>' + escHtml(game.sente) + '</div>' +
+        '<div class="text-truncate text-muted small"><span class="opacity-50 me-1">☖</span>' + escHtml(game.gote) + '</div>' +
       '</td>' +
-      '<td class="align-middle">' + sourceBadge(game.site) + '</td>' +
+      '<td class="align-middle d-none d-md-table-cell">' + sourceBadge(game.site) + '</td>' +
       '<td class="align-middle status-cell">' + statusBadge + '</td>' +
-      (isLoggedIn ? '<td class="align-middle puzzles-cell">' + puzzlesCell + '</td>' : '') +
+      (isLoggedIn ? '<td class="align-middle puzzles-cell d-none d-md-table-cell">' + puzzlesCell + '</td>' : '') +
       '<td class="align-middle actions-cell text-nowrap">' + viewBtn + analyzeBtn + '</td>' +
       '</tr>'
     );

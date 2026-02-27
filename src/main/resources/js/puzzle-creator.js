@@ -314,8 +314,6 @@ function handleSquareSelect(square) {
             
             // Display the selected sequence
             displaySequence(allSequences[i]);
-            
-            console.log(`[PUZZLE-CREATOR] Selected candidate ${i + 1} by clicking on square ${square}`);
             break;
         }
     }
@@ -368,8 +366,6 @@ function finishBlunderCapture(usi) {
 // Load a puzzle into the editor
 function loadPuzzle(puzzle, showToast) {
     if (showToast === undefined) showToast = true;
-    console.log('[PUZZLE-CREATOR] Loading puzzle:', puzzle);
-    console.log('[PUZZLE-CREATOR] move_comments field:', puzzle.move_comments);
 
     currentPuzzleId = puzzle._id.$oid;
     $('#puzzle-name').val(puzzle.name);
@@ -392,13 +388,11 @@ function loadPuzzle(puzzle, showToast) {
         loadMoveComments(puzzle.move_comments);
     } else {
         moveComments = {}; // Reset comments
-        console.log('[PUZZLE-CREATOR] No move_comments found, reset to empty');
     }
 
     // Load blunder moves if available
     if (puzzle.blunder_moves && Array.isArray(puzzle.blunder_moves)) {
         blunderMoves = puzzle.blunder_moves.slice();
-        console.log('[PUZZLE-CREATOR] Loaded blunder moves:', blunderMoves);
     } else {
         blunderMoves = [];
     }
@@ -407,7 +401,6 @@ function loadPuzzle(puzzle, showToast) {
     // Load tags if available
     if (puzzle.tags && Array.isArray(puzzle.tags)) {
         tags = puzzle.tags.slice();
-        console.log('[PUZZLE-CREATOR] Loaded tags:', tags);
     } else {
         tags = [];
     }
@@ -418,7 +411,6 @@ function loadPuzzle(puzzle, showToast) {
 
     // Restore analysis data if available (no engine call needed)
     if (puzzle.analysis_data && puzzle.analysis_data.length > 0) {
-        console.log('[PUZZLE-CREATOR] Restoring saved analysis data...');
         try {
             allSequences = JSON.parse(puzzle.analysis_data);
             // Tag existing sequences as best if not already tagged
@@ -455,7 +447,6 @@ function loadPuzzle(puzzle, showToast) {
                             }
                         });
                     }
-                    console.log('[PUZZLE-CREATOR] Restored blunder analyses:', blunderData.length, 'blunder sequences');
                 } catch (e) {
                     console.error('[PUZZLE-CREATOR] Failed to parse blunder_analyses:', e);
                 }
@@ -470,7 +461,6 @@ function loadPuzzle(puzzle, showToast) {
         }
     } else if (puzzle.selected_sequence && puzzle.selected_sequence.length > 0) {
         // Backward compat: build minimal sequence objects from USI strings (no scores)
-        console.log('[PUZZLE-CREATOR] Restoring from selected_sequence (no scores)...');
         initialSfen = puzzle.sfen || '';
         const minimalSequence = puzzle.selected_sequence.map((usi, index) => ({
             moveNum: index + 1,
@@ -697,11 +687,7 @@ function analyzePosition(multiPv = 3) {
         success: function(response) {
             Swal.close();
             
-            console.log('[PUZZLE-CREATOR] Analysis response:', response);
-            console.log('[PUZZLE-CREATOR] Moves:', response.moves);
-            
             if (response.success && response.moves && response.moves.length > 0) {
-                console.log('[PUZZLE-CREATOR] Displaying', response.moves.length, 'moves');
                 displayEngineMoves(response.moves);
             } else {
                 console.error('[PUZZLE-CREATOR] Analysis failed:', response.error);
@@ -795,7 +781,6 @@ function analyzeSequence() {
                 const bestCount = allSequences.length;
                 selectedCandidateIndices = allSequences.map((_, i) => i).slice(0, Math.min(3, bestCount));
 
-                console.log('[PUZZLE-CREATOR] Found', bestCount, 'best-move candidate sequences');
 
                 // Chain blunder analysis if blunder moves exist
                 if (blunderMoves.length > 0) {
@@ -821,7 +806,6 @@ function analyzeSequence() {
                             $('#stop-analysis').hide();
 
                             if (blunderResponse.success && blunderResponse.blunderAnalyses) {
-                                console.log('[PUZZLE-CREATOR] Blunder analysis response:', blunderResponse);
                                 window.blunderAnalyses = blunderResponse.blunderAnalyses;
 
                                 // Tag each blunder sequence and append to allSequences
@@ -971,7 +955,6 @@ function displayCandidateArrows() {
         addBlunderArrows(autoShapes);
     }
 
-    console.log('[PUZZLE-CREATOR] Setting candidate arrows:', autoShapes);
     sg.setAutoShapes(autoShapes);
 }
 
@@ -1297,7 +1280,6 @@ function loadMoveComments(comments) {
         Object.keys(comments).forEach(key => {
             moveComments[key] = comments[key];
         });
-        console.log('[PUZZLE-CREATOR] Loaded move comments:', moveComments);
     } else {
         moveComments = {};
     }
@@ -1435,8 +1417,6 @@ function applyMove(moveUsi, index, animate = true) {
     const opponentColor = initialTurn === 'sente' ? 'gote' : 'sente';
     const currentColor = isInitialPlayerTurn ? initialTurn : opponentColor;
 
-    console.log(`[SEQUENCE] Applying move ${index}: ${moveUsi} for ${currentColor} (animate: ${animate})`);
-
     // Force piece count in hand if it's a drop to avoid Shogiground blocking it
     if (moveUsi.includes('*')) {
         const roleStr = moveUsi[0].toLowerCase();
@@ -1474,7 +1454,6 @@ function applyMove(moveUsi, index, animate = true) {
         sg.move(orig, dest, prom);
 
         if (capturedPiece) {
-            console.log(`[SEQUENCE] Captured ${capturedPiece.role} for ${currentColor}`);
             // In Shogi, captured piece changes color and goes to capturer's hand
             // We need to unpromote it if it was promoted
             const unpromotedRole = Shogiops.variantUtil.unpromote("standard")(capturedPiece.role) || capturedPiece.role;
@@ -1489,7 +1468,6 @@ function applyMove(moveUsi, index, animate = true) {
 
 // Display engine moves as arrows on the board
 function displayEngineMoves(moves) {
-    console.log('[PUZZLE-CREATOR] displayEngineMoves called with:', moves);
     if (!sg) {
         console.error('[PUZZLE-CREATOR] sg is not initialized!');
         return;
@@ -1500,7 +1478,6 @@ function displayEngineMoves(moves) {
     
     moves.forEach((move, index) => {
         const usi = move.usi;
-        console.log(`[PUZZLE-CREATOR] Processing move ${index}:`, move, 'USI:', usi);
         if (!usi || usi.length < 3) {
             console.warn(`[PUZZLE-CREATOR] Skipping move ${index} - invalid USI:`, usi);
             return;
@@ -1515,7 +1492,6 @@ function displayEngineMoves(moves) {
         if (usi.includes('*')) {
             const pieceChar = usi.charAt(0);
             const dest = usi.substring(2);  // Get everything after P*
-            console.log(`[PUZZLE-CREATOR] Drop move - piece: '${pieceChar}', dest: '${dest}', valid: ${isValidSquare(dest)}`);
             
             if (!isValidSquare(dest)) {
                 console.warn(`[PUZZLE-CREATOR] Skipping drop move - invalid destination: '${dest}'`);
@@ -1545,9 +1521,7 @@ function displayEngineMoves(moves) {
             // Regular move: from orig to dest
             const orig = usi.substring(0, 2);
             const dest = usi.substring(2, 4);
-            
-            console.log(`[PUZZLE-CREATOR] Regular move - orig: '${orig}', dest: '${dest}', valid: ${isValidSquare(orig) && isValidSquare(dest)}`);
-            
+
             if (!isValidSquare(orig) || !isValidSquare(dest)) {
                 console.warn(`[PUZZLE-CREATOR] Skipping regular move - invalid squares: orig='${orig}', dest='${dest}'`);
                 return;
@@ -1565,12 +1539,9 @@ function displayEngineMoves(moves) {
         }
     });
     
-    console.log('[PUZZLE-CREATOR] Setting autoShapes:', autoShapes);
-    console.log('[PUZZLE-CREATOR] AutoShapes JSON:', JSON.stringify(autoShapes, null, 2));
     // Set auto shapes on the board
     try {
         sg.setAutoShapes(autoShapes);
-        console.log('[PUZZLE-CREATOR] AutoShapes set successfully');
     } catch (e) {
         console.error('[PUZZLE-CREATOR] Error setting autoShapes:', e);
         console.error('[PUZZLE-CREATOR] Problematic shapes:', autoShapes);

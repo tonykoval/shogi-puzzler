@@ -80,16 +80,11 @@ object LoginRoutes extends BaseRoutes {
                 prompt: Option[String] = None,
                 hd: Option[String] = None,
                 state: Option[String] = None,
+                iss: Option[String] = None,
                 request: cask.Request = null
               ): cask.Response[String] = {
 
     Option(request).flatMap(redirectToConfiguredHostIfNeeded).getOrElse {
-      logger.info(s"OAuth callback: scope=$scope authuser=$authuser prompt=$prompt hd=$hd state=$state")
-      if (request != null) {
-        logger.info(s"Full callback URL: ${request.exchange.getRequestURI}")
-        logger.info(s"Query Params: ${request.queryParams}")
-      }
-
       val tokenResp = requests.post(
         "https://oauth2.googleapis.com/token",
         data = ujson.Obj(
@@ -115,15 +110,11 @@ object LoginRoutes extends BaseRoutes {
       logger.info(s"User authenticated: email=$email")
 
       if (!isEmailAllowed(email)) {
-        logger.info(s"❌ Access denied for $email")
-
+        logger.warn(s"Access denied for $email")
         return noCacheRedirect("/")
       }
 
-      logger.info(s"✅ Access granted for $email")
       val sessionToken = encodeSession(userJson)
-      val host = Option(request).flatMap(_.headers.get("host")).flatMap(_.headOption).getOrElse("localhost")
-      logger.info(s"Setting session cookie for host $host: $sessionToken")
 
       cask.Response(
         "",
@@ -146,13 +137,6 @@ object LoginRoutes extends BaseRoutes {
   @cask.get("/logout")
   def logout(request: cask.Request): cask.Response[String] = {
     redirectToConfiguredHostIfNeeded(request).getOrElse {
-      request.cookies
-        .get("session")
-        .map(_.value)
-        .foreach { sid =>
-          logger.info(s"Logout session=$sid")
-        }
-
       cask.Response(
         "",
         statusCode = 302,

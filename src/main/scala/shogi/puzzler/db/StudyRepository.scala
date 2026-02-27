@@ -204,6 +204,13 @@ object StudyRepository {
     ).toFuture().map(_ => ())
   }
 
+  def renameStudy(id: String, name: String): Future[Unit] = {
+    collection.updateOne(
+      equal("_id", new ObjectId(id)),
+      set("name", name)
+    ).toFuture().map(_ => ())
+  }
+
   def toggleStudyPublic(id: String, isPublic: Boolean): Future[Unit] = {
     logger.info(s"Setting study $id is_public=$isPublic")
     collection.updateOne(
